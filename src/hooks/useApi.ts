@@ -10,8 +10,20 @@ export function useApi() {
       try {
         const instance = await WorkspaceAPI.connect(
           window.parent,
-          async (event: string, data: any) => {
-            console.log("Trimble Event:", event, data);
+          (event: string, args: any) => {
+            switch (event) {
+              case "extension.command":
+                console.log("Command:", args);
+                break;
+              case "extension.accessToken":
+                console.log("Token:", args);
+                break;
+              case "extension.userSettingsChanged":
+                console.log("Settings changed");
+                break;
+              default:
+                console.log("Event:", event, args);
+            }
           },
           30000
         );
@@ -19,7 +31,14 @@ export function useApi() {
         await instance.ui.setMenu({
           title: "4D Bauablauf",
           icon: "https://project-fb9pr-red.vercel.app/icons.svg",
-          command: "open"
+          command: "open",
+          subMenus: [
+            {
+              title: "Simulation starten",
+              icon: "https://project-fb9pr-red.vercel.app/icons.svg",
+              command: "simulation"
+            }
+          ]
         });
 
         setApi(instance);

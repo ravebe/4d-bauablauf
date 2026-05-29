@@ -1,5 +1,7 @@
 {
   "title": "4D Bauablauf",
   "description": "4D Bauablaufsimulation mit IFC-Modellen",
-  "url": "https://project-fb9pr-red.vercel.app"
+  "url": "https://project-fb9pr-red.vercel.app",
+  "icon": "https://project-fb9pr-red.vercel.app/icons.svg",
+  "enabled": true
 }
