@@ -14,3 +14,8 @@ export interface Modell {
   id: string;
   name: string;
 }
+
+export interface AppState {
+  tasks: Task[];
+  aktivesModellId: string;
+}
