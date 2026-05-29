@@ -1,73 +1,44 @@
-import { useState, useEffect } from "react";
-import type { Modell } from "../types";
+import type { ViewerState } from "../hooks/useApi";
 
 interface Props {
   api: any;
-  aktivesModellId: string;
+  viewerState: ViewerState;
   setAktivesModellId: (id: string) => void;
 }
 
-export default function ModelSelector({ api, aktivesModellId, setAktivesModellId }: Props) {
-  const [modelle, setModelle] = useState<Modell[]>([]);
-  const [laden, setLaden] = useState(false);
-  const [fehler, setFehler] = useState("");
+export default function ModelSelector({ api, viewerState, setAktivesModellId }: Props) {
+  const { modelle, aktivesModellId } = viewerState;
 
-  async function modelleAbrufen() {
-    if (!api) { setFehler("Keine Verbindung."); return; }
-    setLaden(true);
-    setFehler("");
+  async function aktualisieren() {
+    if (!api) return;
     try {
       const result = await api.viewer.getModels();
-      const rohe = Array.isArray(result) ? result : [];
-      const liste: Modell[] = rohe.map((m: any) => ({
-        id: m.modelId || m.id || String(m),
-        name: m.name || m.fileName || "Unbekanntes Modell",
-      }));
-      setModelle(liste);
-      // Automatisch erstes Modell wählen
-      if (liste.length > 0 && !aktivesModellId) {
-        setAktivesModellId(liste[0].id);
-      }
-      // Wenn aktuelles Modell nicht mehr in Liste → erstes wählen
-      if (liste.length > 0 && !liste.find(m => m.id === aktivesModellId)) {
-        setAktivesModellId(liste[0].id);
-      }
-    } catch (err) {
-      console.error("Modelle:", err);
-      setFehler("Modelle konnten nicht geladen werden.");
-    } finally {
-      setLaden(false);
+      console.log("Modelle raw:", result);
+    } catch (e) {
+      console.error(e);
     }
   }
-
-  useEffect(() => {
-    if (api) modelleAbrufen();
-  }, [api]);
 
   return (
     <div className="panel">
       <div className="section-header">
         <span>IFC-Modelle</span>
-        <button className="btn-xs" onClick={modelleAbrufen} disabled={laden}>
-          {laden ? "⟳" : "⟳ Aktualisieren"}
-        </button>
+        <button className="btn-xs" onClick={aktualisieren}>⟳ Debug</button>
       </div>
 
       <div className="info-box">
-        Modelle werden automatisch erkannt. Das aktive Modell (blau) wird für alle Operationen verwendet.
+        Modelle werden automatisch erkannt. Aktives Modell (blau) wird für alle Operationen genutzt.
       </div>
 
-      {fehler && <div className="alert error">{fehler}</div>}
-
-      {modelle.length === 0 && !laden && (
+      {modelle.length === 0 && (
         <div className="empty-state">
-          <div style={{ fontSize: 32 }}>🏗️</div>
-          <p>Keine Modelle gefunden.</p>
-          <p style={{ fontSize: 10, color: "#555" }}>Lade zuerst ein IFC-Modell im 3D Viewer.</p>
+          <div style={{ fontSize: 28 }}>🏗️</div>
+          <p>Keine Modelle erkannt.</p>
+          <p style={{ fontSize: 10, color: "#555" }}>Lade ein IFC-Modell im 3D Viewer.</p>
         </div>
       )}
 
-      {modelle.map((m) => (
+      {modelle.map(m => (
         <div
           key={m.id}
           className={`modell-item ${aktivesModellId === m.id ? "aktiv" : ""}`}
@@ -76,13 +47,17 @@ export default function ModelSelector({ api, aktivesModellId, setAktivesModellId
           <div className="modell-icon">🏗️</div>
           <div className="modell-info">
             <div className="modell-name">{m.name}</div>
-            <div className="modell-id">{m.id.slice(0, 20)}...</div>
+            <div className="modell-id">{m.id.slice(0, 22)}...</div>
           </div>
-          {aktivesModellId === m.id && (
-            <span className="aktiv-badge">● Aktiv</span>
-          )}
+          {aktivesModellId === m.id && <span className="aktiv-badge">● Aktiv</span>}
         </div>
       ))}
+
+      {aktivesModellId && (
+        <div style={{ marginTop: 8, padding: "6px 8px", background: "#1a2a3a", borderRadius: 6, fontSize: 10, color: "#64a8ff" }}>
+          Aktive ID: {aktivesModellId.slice(0, 30)}...
+        </div>
+      )}
     </div>
   );
 }

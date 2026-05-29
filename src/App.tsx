@@ -6,7 +6,7 @@ import SimulationPlayer from "./components/SimulationPlayer";
 import { useApi } from "./hooks/useApi";
 import type { Task } from "./types";
 
-const STORAGE_KEY = "4d-bauablauf-state";
+const STORAGE_KEY = "4d-bauablauf-v2";
 
 function ladeState(): Task[] {
   try {
@@ -17,15 +17,12 @@ function ladeState(): Task[] {
 }
 
 function speichereState(tasks: Task[]) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
-  } catch {}
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks)); } catch {}
 }
 
 function App() {
-  const { api, connected } = useApi();
+  const { api, connected, viewerState, setViewerState } = useApi();
   const [tasks, setTasksRaw] = useState<Task[]>(ladeState);
-  const [aktivesModellId, setAktivesModellId] = useState<string>("");
   const [activeTab, setActiveTab] = useState<"gantt" | "modelle" | "tasks" | "simulation">("gantt");
 
   function setTasks(neueTasks: Task[]) {
@@ -33,30 +30,23 @@ function App() {
     speichereState(neueTasks);
   }
 
-  // Gantt neu laden aber Verknüpfungen behalten
   function ganttAktualisieren(neueTasks: Task[]) {
-    const merged = neueTasks.map(neuerTask => {
-      const alter = tasks.find(t =>
-        t.name.toLowerCase() === neuerTask.name.toLowerCase()
-      );
-      if (alter) {
-        return {
-          ...neuerTask,
-          typ: alter.typ,
-          objektGuids: alter.objektGuids,
-          manuellefarbe: alter.manuellefarbe,
-        };
-      }
-      return neuerTask;
+    const merged = neueTasks.map(neu => {
+      const alt = tasks.find(t => t.name.toLowerCase() === neu.name.toLowerCase());
+      return alt ? { ...neu, typ: alt.typ, objektGuids: alt.objektGuids, manuellefarbe: alt.manuellefarbe } : neu;
     });
     setTasks(merged);
+  }
+
+  function setAktivesModellId(id: string) {
+    setViewerState(prev => ({ ...prev, aktivesModellId: id }));
   }
 
   const tabs = [
     { id: "gantt", label: "Gantt", icon: "📋" },
     { id: "modelle", label: "Modelle", icon: "🏗️" },
     { id: "tasks", label: "Bauteile", icon: "🔧" },
-    { id: "simulation", label: "Simulation", icon: "▶" },
+    { id: "simulation", label: "Abspielen", icon: "▶" },
   ] as const;
 
   return (
@@ -75,7 +65,7 @@ function App() {
       </header>
 
       <nav>
-        {tabs.map((tab) => (
+        {tabs.map(tab => (
           <button
             key={tab.id}
             className={activeTab === tab.id ? "active" : ""}
@@ -89,16 +79,12 @@ function App() {
 
       <main>
         {activeTab === "gantt" && (
-          <GanttImport
-            tasks={tasks}
-            setTasks={setTasks}
-            ganttAktualisieren={ganttAktualisieren}
-          />
+          <GanttImport tasks={tasks} setTasks={setTasks} ganttAktualisieren={ganttAktualisieren} />
         )}
         {activeTab === "modelle" && (
           <ModelSelector
             api={api}
-            aktivesModellId={aktivesModellId}
+            viewerState={viewerState}
             setAktivesModellId={setAktivesModellId}
           />
         )}
@@ -107,14 +93,14 @@ function App() {
             tasks={tasks}
             setTasks={setTasks}
             api={api}
-            aktivesModellId={aktivesModellId}
+            viewerState={viewerState}
           />
         )}
         {activeTab === "simulation" && (
           <SimulationPlayer
             tasks={tasks}
             api={api}
-            aktivesModellId={aktivesModellId}
+            aktivesModellId={viewerState.aktivesModellId}
           />
         )}
       </main>

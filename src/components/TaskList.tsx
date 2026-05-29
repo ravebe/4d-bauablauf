@@ -1,18 +1,20 @@
 import { useState, useRef } from "react";
 import type { Task, TaskTyp } from "../types";
+import type { ViewerState } from "../hooks/useApi";
 
 interface Props {
   tasks: Task[];
   setTasks: (tasks: Task[]) => void;
   api: any;
-  aktivesModellId: string;
+  viewerState: ViewerState;
 }
 
 interface AttributMap {
   [key: string]: Set<string>;
 }
 
-export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Props) {
+export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
+  const { selektion, aktivesModellId } = viewerState;
   const [aktiverTask, setAktiverTask] = useState<string | null>(null);
   const [attributKey, setAttributKey] = useState("");
   const [attributValue, setAttributValue] = useState("");
@@ -25,49 +27,24 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
   const [showKeyDrop, setShowKeyDrop] = useState(false);
   const [showValueDrop, setShowValueDrop] = useState(false);
   const keyRef = useRef<HTMLDivElement>(null);
-  const valueRef = useRef<HTMLDivElement>(null);
-
-  // Hilfsfunktion: Selektion normalisieren (verschiedene API-Formate)
-  function normalisiereSelection(raw: any): number[] {
-    if (!raw) return [];
-    // Format: Array von Zahlen
-    if (Array.isArray(raw) && raw.every((x: any) => typeof x === "number")) return raw;
-    // Format: Array von Objekten mit id/entityId
-    if (Array.isArray(raw)) {
-      return raw
-        .map((s: any) => {
-          if (typeof s === "number") return s;
-          if (s?.id != null) return Number(s.id);
-          if (s?.entityId != null) return Number(s.entityId);
-          if (s?.runtimeId != null) return Number(s.runtimeId);
-          return null;
-        })
-        .filter((x): x is number => x !== null && !isNaN(x));
-    }
-    // Format: {data: [...]}
-    if (raw?.data) return normalisiereSelection(raw.data);
-    return [];
-  }
 
   async function ladeAttribute() {
     if (!api || !aktivesModellId) return;
     setAttributeLaden(true);
     try {
       const objekte = await api.viewer.getObjects(aktivesModellId);
-      const roheIds = Array.isArray(objekte) ? objekte : [];
-      const ids = roheIds.slice(0, 150).map((o: any) => {
-        if (typeof o === "string") return o;
-        if (o?.id) return o.id;
-        return String(o);
-      });
+      const rohe = Array.isArray(objekte) ? objekte : [];
+      const ids = rohe.slice(0, 150).map((o: any) =>
+        typeof o === "string" ? o : o?.id ?? String(o)
+      ).filter(Boolean);
+
       const eigenschaften = await api.viewer.getObjectProperties(aktivesModellId, ids);
-      const map: AttributMap = {};
       const props = Array.isArray(eigenschaften) ? eigenschaften : [];
+      const map: AttributMap = {};
+
       for (const obj of props) {
-        const gruppen = Array.isArray(obj?.properties) ? obj.properties : [];
-        for (const gruppe of gruppen) {
-          const propListe = Array.isArray(gruppe?.properties) ? gruppe.properties : [];
-          for (const prop of propListe) {
+        for (const gruppe of (obj?.properties ?? [])) {
+          for (const prop of (gruppe?.properties ?? [])) {
             if (!prop?.name) continue;
             if (!map[prop.name]) map[prop.name] = new Set();
             if (prop.value != null) map[prop.name].add(String(prop.value));
@@ -85,7 +62,6 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
   function onKeyChange(val: string) {
     setAttributKey(val);
     setAttributValue("");
-    setValueVorschlaege([]);
     if (!val) { setKeyVorschlaege([]); setShowKeyDrop(false); return; }
     const treffer = Object.keys(attributMap)
       .filter(k => k.toLowerCase().includes(val.toLowerCase()))
@@ -132,9 +108,7 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
     try {
       const runtimeIds = await api.viewer.convertToObjectRuntimeIds(aktivesModellId, guids);
       await api.viewer.setSelection(runtimeIds);
-    } catch (e) {
-      console.warn("Markierung:", e);
-    }
+    } catch (e) { console.warn("Markierung:", e); }
   }
 
   async function taskAnklicken(taskId: string) {
@@ -145,36 +119,32 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
     setAttributValue("");
     setShowKeyDrop(false);
     setShowValueDrop(false);
-
     if (neuerTask) {
       if (Object.keys(attributMap).length === 0) ladeAttribute();
       const task = tasks.find(t => t.id === taskId);
-      if (task && task.objektGuids.length > 0) {
-        markiereImViewer(task.objektGuids);
-      }
+      if (task && task.objektGuids.length > 0) markiereImViewer(task.objektGuids);
     }
   }
 
   async function perAttributZuweisen(taskId: string) {
     if (!api || !aktivesModellId) { setMeldung({ text: "Kein Modell aktiv.", typ: "err" }); return; }
-    if (!attributKey || !attributValue) { setMeldung({ text: "Bitte Attribut und Wert eingeben.", typ: "err" }); return; }
+    if (!attributKey || !attributValue) { setMeldung({ text: "Attribut und Wert eingeben.", typ: "err" }); return; }
     setLaden(true);
     setMeldung({ text: "⟳ Suche Bauteile...", typ: "info" });
     try {
       const roheObjekte = await api.viewer.getObjects(aktivesModellId);
       const objekte = Array.isArray(roheObjekte) ? roheObjekte : [];
-      const ids = objekte.map((o: any) => typeof o === "string" ? o : o?.id ?? String(o));
+      const ids = objekte.map((o: any) => typeof o === "string" ? o : o?.id ?? String(o)).filter(Boolean);
+
       const roheEigen = await api.viewer.getObjectProperties(aktivesModellId, ids);
       const eigenschaften = Array.isArray(roheEigen) ? roheEigen : [];
       const gefundeneGuids: string[] = [];
 
       for (const obj of eigenschaften) {
-        const gruppen = Array.isArray(obj?.properties) ? obj.properties : [];
         let gefunden = false;
-        for (const gruppe of gruppen) {
+        for (const gruppe of (obj?.properties ?? [])) {
           if (gefunden) break;
-          const propListe = Array.isArray(gruppe?.properties) ? gruppe.properties : [];
-          for (const prop of propListe) {
+          for (const prop of (gruppe?.properties ?? [])) {
             if (
               prop?.name?.toLowerCase().includes(attributKey.toLowerCase()) &&
               String(prop?.value ?? "").toLowerCase().includes(attributValue.toLowerCase())
@@ -202,26 +172,25 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
       setMeldung({ text: `✓ ${gefundeneGuids.length} Bauteile gefunden und markiert.`, typ: "ok" });
     } catch (err) {
       console.error("Attribut-Filter:", err);
-      setMeldung({ text: "Fehler bei der Suche. Siehe Konsole.", typ: "err" });
+      setMeldung({ text: "Fehler bei der Suche.", typ: "err" });
     } finally {
       setLaden(false);
     }
   }
 
+  // KERN-FIX: Selektion kommt jetzt als Event aus useApi
   async function perKlickZuweisen(taskId: string) {
     if (!api || !aktivesModellId) { setMeldung({ text: "Kein Modell aktiv.", typ: "err" }); return; }
+
+    console.log("Aktuelle Selektion aus Event:", selektion);
+
+    if (!selektion || selektion.length === 0) {
+      setMeldung({ text: "Keine Bauteile ausgewählt. Bitte im 3D Viewer anklicken.", typ: "err" });
+      return;
+    }
+
     try {
-      setMeldung({ text: "⟳ Lese Selektion...", typ: "info" });
-      const rawSel = await api.viewer.getSelection();
-      console.log("Raw Selection:", rawSel);
-      const runtimeIds = normalisiereSelection(rawSel);
-
-      if (runtimeIds.length === 0) {
-        setMeldung({ text: "Keine Bauteile ausgewählt. Bitte im 3D Viewer anklicken.", typ: "err" });
-        return;
-      }
-
-      const guids = await api.viewer.convertToObjectIds(aktivesModellId, runtimeIds);
+      const guids = await api.viewer.convertToObjectIds(aktivesModellId, selektion);
       const guidsArr = Array.isArray(guids) ? guids.filter(Boolean) : [];
 
       if (guidsArr.length === 0) {
@@ -244,7 +213,7 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
   if (!aktivesModellId) {
     return (
       <div className="panel">
-        <div className="alert warn">⚠ Kein Modell erkannt. Bitte zuerst "Modelle" Tab öffnen.</div>
+        <div className="alert warn">⚠ Kein Modell erkannt. Öffne den "Modelle" Tab.</div>
       </div>
     );
   }
@@ -253,7 +222,11 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
     <div className="panel" onClick={() => { setShowKeyDrop(false); setShowValueDrop(false); }}>
       <div className="section-header">
         <span>Bauteile zuweisen</span>
-        <span style={{ fontSize: 10, color: "#555" }}>{tasks.length} Tasks</span>
+        {selektion.length > 0 && (
+          <span style={{ color: "#0a84ff", fontSize: 10 }}>
+            {selektion.length} ausgewählt
+          </span>
+        )}
       </div>
 
       {meldung && (
@@ -263,12 +236,12 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
       )}
 
       {tasks.length === 0 && (
-        <p className="hinweis" style={{ textAlign: "center", padding: "20px 0" }}>
-          Bitte zuerst eine Gantt-Datei laden.
-        </p>
+        <div className="empty-state">
+          <p>Bitte zuerst eine Gantt-Datei laden.</p>
+        </div>
       )}
 
-      {tasks.map((task) => (
+      {tasks.map(task => (
         <div key={task.id} className={`task-card ${aktiverTask === task.id ? "offen" : ""}`}>
           <div className="task-header" onClick={() => taskAnklicken(task.id)}>
             <span className={`typ-dot ${task.typ}`}>●</span>
@@ -277,7 +250,7 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
               <span className={`typ-badge ${task.typ}`}>{task.typ}</span>
               <span className="bauteil-count">
                 {task.objektGuids.length > 0
-                  ? <><span style={{ color: "#4da6ff" }}>⬡</span> {task.objektGuids.length}</>
+                  ? <span style={{ color: "#0a84ff" }}>⬡ {task.objektGuids.length}</span>
                   : <span style={{ color: "#444" }}>∅</span>
                 }
               </span>
@@ -288,11 +261,10 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
           {aktiverTask === task.id && (
             <div className="task-detail" onClick={e => e.stopPropagation()}>
 
-              {/* Typ */}
               <div className="detail-block">
                 <div className="sub-label">Task-Typ</div>
                 <div className="typ-auswahl">
-                  {(["neubau", "bestand", "abbruch"] as TaskTyp[]).map((typ) => (
+                  {(["neubau", "bestand", "abbruch"] as TaskTyp[]).map(typ => (
                     <button
                       key={typ}
                       className={`typ-btn ${task.typ === typ ? `aktiv-${typ}` : ""}`}
@@ -304,11 +276,10 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
                 </div>
               </div>
 
-              {/* Attribut-Filter */}
               <div className="detail-block">
                 <div className="sub-label">
                   IFC-Attribut Filter
-                  {attributeLaden && <span className="laden-text"> ⟳ Lade Attribute...</span>}
+                  {attributeLaden && <span className="laden-text"> ⟳ Lade...</span>}
                 </div>
 
                 <div ref={keyRef} className="autocomplete-wrap">
@@ -329,7 +300,7 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
                   )}
                 </div>
 
-                <div ref={valueRef} className="autocomplete-wrap">
+                <div className="autocomplete-wrap">
                   <input
                     className="attr-input"
                     placeholder="Wert (z.B. OG1, Beton, BA-03)"
@@ -347,42 +318,41 @@ export default function TaskList({ tasks, setTasks, api, aktivesModellId }: Prop
                   )}
                 </div>
 
-                <button
-                  className="btn-primary"
-                  onClick={() => perAttributZuweisen(task.id)}
-                  disabled={laden || !attributKey || !attributValue}
-                >
+                <button className="btn-primary" onClick={() => perAttributZuweisen(task.id)} disabled={laden || !attributKey || !attributValue}>
                   {laden ? "⟳ Suche..." : "🔍 Suchen & Markieren"}
                 </button>
               </div>
 
-              {/* Mausklick */}
               <div className="detail-block">
                 <div className="sub-label">Mausklick Zuweisung</div>
-                <p className="hinweis">Bauteile im 3D Viewer anklicken, dann:</p>
-                <button className="btn-secondary" onClick={() => perKlickZuweisen(task.id)}>
-                  ✓ Ausgewählte Bauteile übernehmen
+                <div className={`selektion-status ${selektion.length > 0 ? "aktiv" : ""}`}>
+                  {selektion.length > 0
+                    ? `✓ ${selektion.length} Bauteil(e) im Viewer ausgewählt`
+                    : "Kein Bauteil ausgewählt – im 3D Viewer anklicken"
+                  }
+                </div>
+                <button
+                  className="btn-secondary"
+                  onClick={() => perKlickZuweisen(task.id)}
+                  disabled={selektion.length === 0}
+                >
+                  ✓ Ausgewählte Bauteile übernehmen ({selektion.length})
                 </button>
               </div>
 
-              {/* Zugewiesene Bauteile */}
               {task.objektGuids.length > 0 && (
                 <div className="detail-block">
                   <div className="sub-label-row">
-                    <span>{task.objektGuids.length} Bauteile zugewiesen</span>
+                    <span>{task.objektGuids.length} Bauteile</span>
                     <div style={{ display: "flex", gap: 4 }}>
-                      <button className="btn-xs" onClick={() => markiereImViewer(task.objektGuids)}>
-                        👁 Markieren
-                      </button>
-                      <button className="btn-xs danger" onClick={() => alleEntfernen(task.id)}>
-                        🗑 Alle löschen
-                      </button>
+                      <button className="btn-xs" onClick={() => markiereImViewer(task.objektGuids)}>👁 Markieren</button>
+                      <button className="btn-xs danger" onClick={() => alleEntfernen(task.id)}>🗑 Alle</button>
                     </div>
                   </div>
                   <div className="guid-liste">
                     {task.objektGuids.map(guid => (
                       <div key={guid} className="guid-item">
-                        <span className="guid-text">{guid.slice(0, 20)}...</span>
+                        <span className="guid-text">{guid.slice(0, 22)}...</span>
                         <button className="btn-remove" onClick={() => guidEntfernen(task.id, guid)}>✕</button>
                       </div>
                     ))}

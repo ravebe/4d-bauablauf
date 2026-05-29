@@ -339,4 +339,10 @@ input[type="number"] {
 input[type="number"]:focus { outline: none; border-color: #0a84ff; }
 
 .einstellung { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.einstellung label { font-size: 11px; color: #8e8e93; min-width: 130px; }
+.einstellung label { font-size: 11px; color: #8e8e93; min-width: 130px; }.selektion-status {
+  padding: 6px 8px; border-radius: 5px;
+  font-size: 11px; color: #636366;
+  background: #1c1c1e; border: 1px solid #3a3a3c;
+  margin-bottom: 6px;
+}
+.selektion-status.aktiv { color: #32d74b; border-color: #32d74b; background: #1a3a1a; }
