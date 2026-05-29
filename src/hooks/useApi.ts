@@ -10,10 +10,18 @@ export function useApi() {
       try {
         const instance = await WorkspaceAPI.connect(
           window.parent,
-          (event: string, data: any) => {
+          async (event: string, data: any) => {
             console.log("Trimble Event:", event, data);
-          }
+          },
+          30000
         );
+
+        await instance.ui.setMenu({
+          title: "4D Bauablauf",
+          icon: "https://project-fb9pr-red.vercel.app/icons.svg",
+          command: "open"
+        });
+
         setApi(instance);
         setConnected(true);
       } catch (err) {
