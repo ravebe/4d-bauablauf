@@ -13,48 +13,57 @@ export default function ModelSelector({ api, aktivesModellId, setAktivesModellId
   const [fehler, setFehler] = useState("");
 
   async function modelleAbrufen() {
-    if (!api) { setFehler("Keine Verbindung zu Trimble Connect."); return; }
+    if (!api) { setFehler("Keine Verbindung."); return; }
     setLaden(true);
     setFehler("");
     try {
       const result = await api.viewer.getModels();
-      const liste: Modell[] = result.map((m: any) => ({
-        id: m.modelId || m.id,
-        name: m.name || "Unbekanntes Modell",
+      const rohe = Array.isArray(result) ? result : [];
+      const liste: Modell[] = rohe.map((m: any) => ({
+        id: m.modelId || m.id || String(m),
+        name: m.name || m.fileName || "Unbekanntes Modell",
       }));
       setModelle(liste);
+      // Automatisch erstes Modell wählen
       if (liste.length > 0 && !aktivesModellId) {
         setAktivesModellId(liste[0].id);
       }
-    } catch {
+      // Wenn aktuelles Modell nicht mehr in Liste → erstes wählen
+      if (liste.length > 0 && !liste.find(m => m.id === aktivesModellId)) {
+        setAktivesModellId(liste[0].id);
+      }
+    } catch (err) {
+      console.error("Modelle:", err);
       setFehler("Modelle konnten nicht geladen werden.");
     } finally {
       setLaden(false);
     }
   }
 
-  useEffect(() => { if (api) modelleAbrufen(); }, [api]);
+  useEffect(() => {
+    if (api) modelleAbrufen();
+  }, [api]);
 
   return (
     <div className="panel">
       <div className="section-header">
         <span>IFC-Modelle</span>
-        <button className="btn-small" onClick={modelleAbrufen} disabled={laden}>
-          {laden ? "⟳ Lade..." : "⟳ Aktualisieren"}
+        <button className="btn-xs" onClick={modelleAbrufen} disabled={laden}>
+          {laden ? "⟳" : "⟳ Aktualisieren"}
         </button>
       </div>
 
       <div className="info-box">
-        Stelle sicher dass deine IFC-Modelle im 3D Viewer geöffnet sind.
-        Das aktive Modell wird für alle Operationen verwendet.
+        Modelle werden automatisch erkannt. Das aktive Modell (blau) wird für alle Operationen verwendet.
       </div>
 
       {fehler && <div className="alert error">{fehler}</div>}
 
       {modelle.length === 0 && !laden && (
-        <div style={{ textAlign: "center", padding: "20px", color: "#555" }}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>🏗️</div>
-          <p style={{ fontSize: 11 }}>Keine Modelle gefunden.<br />Lade zuerst ein IFC-Modell.</p>
+        <div className="empty-state">
+          <div style={{ fontSize: 32 }}>🏗️</div>
+          <p>Keine Modelle gefunden.</p>
+          <p style={{ fontSize: 10, color: "#555" }}>Lade zuerst ein IFC-Modell im 3D Viewer.</p>
         </div>
       )}
 
@@ -64,13 +73,13 @@ export default function ModelSelector({ api, aktivesModellId, setAktivesModellId
           className={`modell-item ${aktivesModellId === m.id ? "aktiv" : ""}`}
           onClick={() => setAktivesModellId(m.id)}
         >
-          <span className="modell-icon">🏗️</span>
-          <div style={{ flex: 1 }}>
+          <div className="modell-icon">🏗️</div>
+          <div className="modell-info">
             <div className="modell-name">{m.name}</div>
-            <div className="modell-id">{m.id.slice(0, 24)}...</div>
+            <div className="modell-id">{m.id.slice(0, 20)}...</div>
           </div>
           {aktivesModellId === m.id && (
-            <span style={{ color: "#4da6ff", fontSize: 11 }}>● Aktiv</span>
+            <span className="aktiv-badge">● Aktiv</span>
           )}
         </div>
       ))}
