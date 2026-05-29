@@ -1,15 +1,5 @@
 {
-  "id": "4d-bauablauf-tool",
-  "name": "4D Bauablauf",
+  "title": "4D Bauablauf",
   "description": "4D Bauablaufsimulation mit IFC-Modellen",
-  "version": "1.0.0",
-  "vendor": "rbelt",
-  "icon": "./icon.png",
-  "extensions": [
-    {
-      "type": "project",
-      "title": "4D Bauablauf",
-      "url": "https://project-fb9pr-red.vercel.app"
-    }
-  ]
+  "url": "https://project-fb9pr-red.vercel.app"
 }
