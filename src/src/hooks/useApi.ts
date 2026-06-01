@@ -40,27 +40,10 @@ function parseSelIds(data: any): number[] {
   return ids;
 }
 
-// Zuverlässige Viewer-Erkennung
-function istViewerKontext(): boolean {
-  // 1. localStorage Flag (gesetzt wenn "Bearbeiten im 3D Viewer" geklickt)
-  if (typeof localStorage !== "undefined") {
-    if (localStorage.getItem("4d-viewer-mode") === "true") {
-      localStorage.removeItem("4d-viewer-mode");
-      return true;
-    }
-  }
-  // 2. document.referrer prüfen
-  if (typeof document !== "undefined") {
-    const ref = document.referrer || "";
-    if (ref.includes("/viewer/3d") || ref.includes("viewer/3d")) return true;
-  }
-  return false;
-}
-
 export function useApi() {
   const [api, setApi] = useState<any>(null);
   const [connected, setConnected] = useState(false);
-  const [isViewerContext, setIsViewerContext] = useState(istViewerKontext);
+  const [isViewerContext, setIsViewerContext] = useState(false);
   const [accessToken, setAccessToken] = useState("");
   const [projectId, setProjectId] = useState("");
   const [viewerState, setViewerState] = useState<ViewerState>({
@@ -79,13 +62,34 @@ export function useApi() {
     } catch { return []; }
   }
 
+  // Zuverlässigste Methode: getModels() wirft Fehler im Projektpanel
+  async function erkenneKontext(instance: any): Promise<boolean> {
+    try {
+      // Im Projektpanel: wirft "not applicable here"
+      // Im 3D Viewer: gibt Array zurück (auch wenn leer)
+      const result = await instance.viewer.getModels();
+      console.log("Viewer context erkannt – getModels OK:", result);
+      return true;
+    } catch (e) {
+      const msg = String(e).toLowerCase();
+      if (msg.includes("not applicable") || msg.includes("viewer")) {
+        console.log("Projektpanel context erkannt:", e);
+        return false;
+      }
+      // Unbekannter Fehler → vorsichtig als Viewer behandeln
+      return true;
+    }
+  }
+
   useEffect(() => {
     async function connect() {
       try {
         const instance = await WorkspaceAPI.connect(
           window.parent,
           async (event: string, data: any) => {
-            // Jedes viewer.on* Event = wir sind im 3D Viewer
+            console.log("TC:", event, JSON.stringify(data)?.slice(0, 100));
+
+            // Viewer-Events bestätigen Viewer-Context
             if (event.startsWith("viewer.on")) {
               setIsViewerContext(true);
             }
@@ -138,14 +142,18 @@ export function useApi() {
           } catch {}
         }
 
-        // Modelle laden – wenn vorhanden = Viewer
-        const modelle = await ladeModelle(instance);
-        if (modelle.length > 0) {
-          setIsViewerContext(true);
-          setViewerState(prev => ({
-            ...prev, modelle,
-            aktivesModellId: modelle.length > 0 ? modelle[0].id : "",
-          }));
+        // Context zuverlässig erkennen
+        const istViewer = await erkenneKontext(instance);
+        setIsViewerContext(istViewer);
+
+        if (istViewer) {
+          const modelle = await ladeModelle(instance);
+          if (modelle.length > 0) {
+            setViewerState(prev => ({
+              ...prev, modelle,
+              aktivesModellId: modelle[0].id,
+            }));
+          }
         }
 
         setApi(instance);
