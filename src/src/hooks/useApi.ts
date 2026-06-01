@@ -4,12 +4,54 @@ import * as WorkspaceAPI from "trimble-connect-workspace-api";
 export interface Modell {
   id: string;
   name: string;
+  fileId?: string;
 }
 
 export interface ViewerState {
   selektion: number[];
   aktivesModellId: string;
   modelle: Modell[];
+}
+
+function parseIds(data: any): number[] {
+  if (!data) return [];
+  const outer = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+  const ids: number[] = [];
+  for (const item of outer) {
+    if (Array.isArray(item?.objectRuntimeIds)) {
+      for (const id of item.objectRuntimeIds) {
+        const n = Number(id);
+        if (!isNaN(n) && n >= 0) ids.push(n);
+      }
+      continue;
+    }
+    if (typeof item === "number") { ids.push(item); continue; }
+    if (item != null && typeof item === "object") {
+      for (const k of ["id", "entityId", "runtimeId", "objectRuntimeId"]) {
+        if (item[k] != null) { const n = Number(item[k]); if (!isNaN(n)) { ids.push(n); break; } }
+      }
+    }
+  }
+  return ids;
+}
+
+export function parseObjectIds(rohe: any): number[] {
+  if (!Array.isArray(rohe)) return [];
+  const ids: number[] = [];
+  for (const item of rohe) {
+    if (Array.isArray(item?.objects)) {
+      for (const o of item.objects) {
+        const n = Number(o?.id ?? o);
+        if (!isNaN(n)) ids.push(n);
+      }
+    } else if (typeof item === "number") {
+      ids.push(item);
+    } else if (item?.id != null) {
+      const n = Number(item.id);
+      if (!isNaN(n)) ids.push(n);
+    }
+  }
+  return ids;
 }
 
 export function useApi() {
@@ -22,50 +64,17 @@ export function useApi() {
   });
   const apiRef = useRef<any>(null);
 
-  function parseSelektionIds(data: any): number[] {
-    console.log("parseSelektionIds input:", JSON.stringify(data));
-    if (!data) return [];
-
-    let arr: any[] = [];
-    if (Array.isArray(data)) arr = data;
-    else if (Array.isArray(data?.data)) arr = data.data;
-    else if (Array.isArray(data?.selection)) arr = data.selection;
-    else if (Array.isArray(data?.objects)) arr = data.objects;
-    else {
-      console.log("Unbekanntes Format:", typeof data, data);
-      return [];
-    }
-
-    const ids: number[] = [];
-    for (const item of arr) {
-      if (typeof item === "number") { ids.push(item); continue; }
-      if (typeof item === "object" && item !== null) {
-        const kandidaten = [
-          item.id, item.entityId, item.runtimeId,
-          item.objectRuntimeId, item.objectId,
-        ];
-        for (const k of kandidaten) {
-          if (k != null && !isNaN(Number(k))) { ids.push(Number(k)); break; }
-        }
-      }
-    }
-    console.log("Parsed IDs:", ids);
-    return ids;
-  }
-
   async function ladeModelle(instance: any): Promise<Modell[]> {
     try {
-      const result = await instance.viewer.getModels();
-      console.log("getModels result:", JSON.stringify(result));
-      const rohe = Array.isArray(result) ? result : [];
-      return rohe.map((m: any) => ({
-        id: m.modelId || m.id || String(m),
+      const res = await instance.viewer.getModels();
+      console.log("getModels:", JSON.stringify(res)?.slice(0, 300));
+      const arr = Array.isArray(res) ? res : [];
+      return arr.map((m: any) => ({
+        id: m.modelId || m.id || "",
         name: m.name || m.fileName || m.modelName || "Modell",
-      }));
-    } catch (e) {
-      console.warn("ladeModelle Fehler:", e);
-      return [];
-    }
+        fileId: m.fileId || m.file?.id,
+      })).filter((m: Modell) => m.id);
+    } catch (e) { console.warn("ladeModelle:", e); return []; }
   }
 
   useEffect(() => {
@@ -74,23 +83,24 @@ export function useApi() {
         const instance = await WorkspaceAPI.connect(
           window.parent,
           async (event: string, data: any) => {
-            console.log("TC Event:", event, "Data:", JSON.stringify(data));
+            console.log("TC:", event, JSON.stringify(data)?.slice(0, 200));
 
             if (event === "viewer.onSelectionChanged") {
-              const ids = parseSelektionIds(data);
+              const ids = parseIds(data);
+              console.log("✅ Selektion IDs:", ids);
               setViewerState(prev => ({ ...prev, selektion: ids }));
             }
 
-            if (
-              event === "viewer.onModelLoaded" ||
-              event === "viewer.onModelsLoaded" ||
-              event === "viewer.onModelAdded"
-            ) {
+            if (["viewer.onModelLoaded", "viewer.onModelsLoaded", "viewer.onModelAdded"].includes(event)) {
               const modelle = await ladeModelle(apiRef.current);
               setViewerState(prev => ({
                 ...prev,
                 modelle,
-                aktivesModellId: modelle.length > 0 ? modelle[0].id : prev.aktivesModellId,
+                aktivesModellId: modelle.length > 0
+                  ? (modelle.find(m => m.id === prev.aktivesModellId)
+                    ? prev.aktivesModellId
+                    : modelle[0].id)
+                  : "",
               }));
             }
           },
@@ -105,9 +115,7 @@ export function useApi() {
             icon: "https://project-fb9pr-red.vercel.app/icons.svg",
             command: "open",
           });
-        } catch (e) {
-          console.warn("setMenu:", e);
-        }
+        } catch (e) { console.warn("setMenu:", e); }
 
         const modelle = await ladeModelle(instance);
         setViewerState(prev => ({
@@ -119,7 +127,7 @@ export function useApi() {
         setApi(instance);
         setConnected(true);
       } catch (err) {
-        console.error("Verbindung fehlgeschlagen:", err);
+        console.error("connect:", err);
         setConnected(false);
       }
     }

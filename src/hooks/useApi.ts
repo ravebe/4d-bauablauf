@@ -5,7 +5,6 @@ export interface Modell {
   id: string;
   name: string;
   fileId?: string;
-  fileVersionId?: string;
 }
 
 export interface ViewerState {
@@ -16,23 +15,43 @@ export interface ViewerState {
 
 function parseIds(data: any): number[] {
   if (!data) return [];
-  let arr: any[] = [];
-  if (Array.isArray(data)) arr = data;
-  else if (Array.isArray(data?.data)) arr = data.data;
-  else if (Array.isArray(data?.selection)) arr = data.selection;
-  else if (Array.isArray(data?.objects)) arr = data.objects;
-  else return [];
-
-  return arr
-    .map((x: any) => {
-      if (typeof x === "number") return x;
-      if (x == null) return null;
-      for (const k of ["id", "entityId", "runtimeId", "objectRuntimeId", "objectId"]) {
-        if (x[k] != null) return Number(x[k]);
+  const outer = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+  const ids: number[] = [];
+  for (const item of outer) {
+    if (Array.isArray(item?.objectRuntimeIds)) {
+      for (const id of item.objectRuntimeIds) {
+        const n = Number(id);
+        if (!isNaN(n) && n >= 0) ids.push(n);
       }
-      return null;
-    })
-    .filter((x): x is number => x !== null && !isNaN(x) && x >= 0);
+      continue;
+    }
+    if (typeof item === "number") { ids.push(item); continue; }
+    if (item != null && typeof item === "object") {
+      for (const k of ["id", "entityId", "runtimeId", "objectRuntimeId"]) {
+        if (item[k] != null) { const n = Number(item[k]); if (!isNaN(n)) { ids.push(n); break; } }
+      }
+    }
+  }
+  return ids;
+}
+
+export function parseObjectIds(rohe: any): number[] {
+  if (!Array.isArray(rohe)) return [];
+  const ids: number[] = [];
+  for (const item of rohe) {
+    if (Array.isArray(item?.objects)) {
+      for (const o of item.objects) {
+        const n = Number(o?.id ?? o);
+        if (!isNaN(n)) ids.push(n);
+      }
+    } else if (typeof item === "number") {
+      ids.push(item);
+    } else if (item?.id != null) {
+      const n = Number(item.id);
+      if (!isNaN(n)) ids.push(n);
+    }
+  }
+  return ids;
 }
 
 export function useApi() {
@@ -48,18 +67,14 @@ export function useApi() {
   async function ladeModelle(instance: any): Promise<Modell[]> {
     try {
       const res = await instance.viewer.getModels();
-      console.log("getModels:", JSON.stringify(res));
+      console.log("getModels:", JSON.stringify(res)?.slice(0, 300));
       const arr = Array.isArray(res) ? res : [];
       return arr.map((m: any) => ({
         id: m.modelId || m.id || "",
         name: m.name || m.fileName || m.modelName || "Modell",
         fileId: m.fileId || m.file?.id,
-        fileVersionId: m.fileVersionId || m.file?.versionId,
-      })).filter(m => m.id);
-    } catch (e) {
-      console.warn("ladeModelle:", e);
-      return [];
-    }
+      })).filter((m: Modell) => m.id);
+    } catch (e) { console.warn("ladeModelle:", e); return []; }
   }
 
   useEffect(() => {
@@ -68,11 +83,11 @@ export function useApi() {
         const instance = await WorkspaceAPI.connect(
           window.parent,
           async (event: string, data: any) => {
-            console.log("TC:", event, JSON.stringify(data)?.slice(0, 120));
+            console.log("TC:", event, JSON.stringify(data)?.slice(0, 200));
 
             if (event === "viewer.onSelectionChanged") {
               const ids = parseIds(data);
-              console.log("Selektion IDs:", ids);
+              console.log("✅ Selektion IDs:", ids);
               setViewerState(prev => ({ ...prev, selektion: ids }));
             }
 
@@ -82,7 +97,7 @@ export function useApi() {
                 ...prev,
                 modelle,
                 aktivesModellId: modelle.length > 0
-                  ? (prev.aktivesModellId && modelle.find(m => m.id === prev.aktivesModellId)
+                  ? (modelle.find(m => m.id === prev.aktivesModellId)
                     ? prev.aktivesModellId
                     : modelle[0].id)
                   : "",
