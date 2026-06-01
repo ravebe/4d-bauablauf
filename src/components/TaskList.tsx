@@ -10,50 +10,44 @@ interface Props {
   viewerState: ViewerState;
 }
 
-interface AttributMap { [k: string]: Set<string>; }
+interface PsetAttribut {
+  pset: string;
+  name: string;
+  key: string; // "pset||name"
+}
+
+interface AttributMap {
+  [key: string]: Set<string>; // key = "pset||name"
+}
 
 export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
   const { selektion, aktivesModellId } = viewerState;
   const [aktiverTask, setAktiverTask] = useState<string | null>(null);
-  const [attributKey, setAttributKey] = useState("");
+  const [selectedAttr, setSelectedAttr] = useState<PsetAttribut | null>(null);
   const [attributValue, setAttributValue] = useState("");
   const [laden, setLaden] = useState(false);
   const [meldung, setMeldung] = useState<{ text: string; typ: "ok" | "err" | "info" } | null>(null);
   const [attributMap, setAttributMap] = useState<AttributMap>({});
+  const [allAttrs, setAllAttrs] = useState<PsetAttribut[]>([]);
   const [attributeLaden, setAttributeLaden] = useState(false);
-  const [keyVorschlaege, setKeyVorschlaege] = useState<string[]>([]);
+  const [attrSuche, setAttrSuche] = useState("");
   const [valueVorschlaege, setValueVorschlaege] = useState<string[]>([]);
-  const [showKeyDrop, setShowKeyDrop] = useState(false);
+  const [showAttrDrop, setShowAttrDrop] = useState(false);
   const [showValueDrop, setShowValueDrop] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
-async function getProperties(runtimeIds: number[]) {
-    const BATCH = 20;
+  const BATCH = 10;
+
+  async function getPropertiesBatch(runtimeIds: number[]): Promise<any[]> {
     const alle: any[] = [];
     for (let i = 0; i < runtimeIds.length; i += BATCH) {
       const batch = runtimeIds.slice(i, i + BATCH);
       try {
         const result = await api.viewer.getObjectProperties(aktivesModellId, batch);
         if (Array.isArray(result)) alle.push(...result);
-      } catch (e) { console.warn("batch", i, e); }
+      } catch (e) { console.warn("batch fehler:", e); }
     }
-    console.log("✅ Properties total:", alle.length, "sample id:", alle[0]?.id);
     return alle;
-  }
-
-  async function markiereImViewer(guids: string[]) {
-    if (!api || !aktivesModellId || !guids.length) return;
-    try {
-      // Versuche als Runtime IDs (falls wir Runtime IDs als strings gespeichert haben)
-      const nums = guids.map(Number).filter(n => !isNaN(n) && n >= 0);
-      if (nums.length === guids.length) {
-        await api.viewer.setSelection(nums);
-        return;
-      }
-      // Versuche convertToObjectRuntimeIds (für echte GUIDs)
-      const runtimeIds = await api.viewer.convertToObjectRuntimeIds(aktivesModellId, guids);
-      await api.viewer.setSelection(runtimeIds);
-    } catch (e) { console.warn("markiere:", e); }
   }
 
   async function ladeAttribute() {
@@ -61,106 +55,130 @@ async function getProperties(runtimeIds: number[]) {
     setAttributeLaden(true);
     try {
       const rohe = await api.viewer.getObjects(aktivesModellId);
-      const runtimeIds = parseObjectIds(rohe).slice(0, 150);
-      console.log("Lade Properties für", runtimeIds.length, "Runtime IDs");
+      const runtimeIds = parseObjectIds(rohe).slice(0, 50); // nur 50 für Attribute
       if (!runtimeIds.length) { setAttributeLaden(false); return; }
 
-      const props = await getProperties(runtimeIds);
-      console.log("Props sample:", JSON.stringify(props[0])?.slice(0, 300));
-
+      const props = await getPropertiesBatch(runtimeIds);
       const map: AttributMap = {};
+      const attrsSet = new Map<string, PsetAttribut>();
+
       for (const obj of props) {
         for (const g of (obj?.properties || [])) {
+          const psetName = g?.name || g?.displayName || "Eigenschaften";
           for (const p of (g?.properties || [])) {
             if (!p?.name) continue;
-            if (!map[p.name]) map[p.name] = new Set();
-            if (p.value != null) map[p.name].add(String(p.value));
+            const key = `${psetName}||${p.name}`;
+            if (!map[key]) {
+              map[key] = new Set();
+              attrsSet.set(key, { pset: psetName, name: p.name, key });
+            }
+            if (p.value != null) map[key].add(String(p.value));
           }
         }
       }
       setAttributMap(map);
-      console.log("✅ Attribute geladen:", Object.keys(map).length, Object.keys(map).slice(0, 5));
+      setAllAttrs([...attrsSet.values()]);
+      console.log("✅ Attribute:", attrsSet.size, "PSet-Attribut Paare");
     } catch (e) { console.error("ladeAttribute:", e); }
     finally { setAttributeLaden(false); }
   }
 
-  function onKeyChange(val: string) {
-    setAttributKey(val); setAttributValue("");
-    if (!val) { setKeyVorschlaege([]); setShowKeyDrop(false); return; }
-    const t = Object.keys(attributMap).filter(k => k.toLowerCase().includes(val.toLowerCase())).slice(0, 8);
-    setKeyVorschlaege(t); setShowKeyDrop(t.length > 0);
+  function gefilterteAttrs(): PsetAttribut[] {
+    if (!attrSuche) return allAttrs.slice(0, 10);
+    return allAttrs.filter(a =>
+      a.name.toLowerCase().includes(attrSuche.toLowerCase()) ||
+      a.pset.toLowerCase().includes(attrSuche.toLowerCase())
+    ).slice(0, 10);
   }
 
-  function selectKey(k: string) {
-    setAttributKey(k); setShowKeyDrop(false); setAttributValue("");
-    const w = attributMap[k] ? [...attributMap[k]].slice(0, 10) : [];
-    setValueVorschlaege(w); setShowValueDrop(w.length > 0);
-  }
-
-  function onValueChange(val: string) {
-    setAttributValue(val);
-    if (!attributKey || !attributMap[attributKey]) { setShowValueDrop(false); return; }
-    const w = [...attributMap[attributKey]].filter(v => v.toLowerCase().includes(val.toLowerCase())).slice(0, 8);
-    setValueVorschlaege(w); setShowValueDrop(w.length > 0);
+  function selectAttr(attr: PsetAttribut) {
+    setSelectedAttr(attr);
+    setAttrSuche(`${attr.pset} › ${attr.name}`);
+    setShowAttrDrop(false);
+    setAttributValue("");
+    const werte = attributMap[attr.key] ? [...attributMap[attr.key]].slice(0, 15) : [];
+    setValueVorschlaege(werte);
+    setShowValueDrop(werte.length > 0);
   }
 
   function typAendern(id: string, typ: TaskTyp) {
     setTasks(tasks.map(t => t.id === id ? { ...t, typ } : t));
   }
 
+  async function markiereImViewer(guids: string[]) {
+    if (!api || !aktivesModellId || !guids.length) return;
+    try {
+      const nums = guids.map(Number).filter(n => !isNaN(n) && n >= 0);
+      if (nums.length === guids.length) {
+        await api.viewer.setSelection(nums);
+      } else {
+        const ids = await api.viewer.convertToObjectRuntimeIds(aktivesModellId, guids);
+        await api.viewer.setSelection(ids);
+      }
+    } catch (e) { console.warn("markiere:", e); }
+  }
+
   async function taskAnklicken(taskId: string) {
     const neu = aktiverTask === taskId ? null : taskId;
     setAktiverTask(neu); setMeldung(null);
-    setAttributKey(""); setAttributValue("");
-    setShowKeyDrop(false); setShowValueDrop(false);
+    setAttrSuche(""); setSelectedAttr(null); setAttributValue("");
+    setShowAttrDrop(false); setShowValueDrop(false);
     if (neu) {
-      if (!Object.keys(attributMap).length) ladeAttribute();
+      if (!allAttrs.length) ladeAttribute();
       const t = tasks.find(x => x.id === taskId);
       if (t?.objektGuids.length) markiereImViewer(t.objektGuids);
     }
   }
 
   async function perAttributZuweisen(taskId: string) {
+    if (!selectedAttr || !attributValue.trim()) {
+      setMeldung({ text: "Bitte Attribut und Wert auswählen.", typ: "err" }); return;
+    }
     if (!api || !aktivesModellId) { setMeldung({ text: "Kein Modell aktiv.", typ: "err" }); return; }
-    if (!attributKey || !attributValue) { setMeldung({ text: "Attribut und Wert eingeben.", typ: "err" }); return; }
     setLaden(true);
     setMeldung({ text: "⟳ Suche Bauteile...", typ: "info" });
     try {
       const rohe = await api.viewer.getObjects(aktivesModellId);
-      const runtimeIds = parseObjectIds(rohe);
-      if (!runtimeIds.length) { setMeldung({ text: "Keine Objekte gefunden.", typ: "err" }); setLaden(false); return; }
+      const alleRuntimeIds = parseObjectIds(rohe);
+      if (!alleRuntimeIds.length) { setMeldung({ text: "Keine Objekte gefunden.", typ: "err" }); setLaden(false); return; }
 
-      const props = await getProperties(runtimeIds);
-      const gefundeneIds: string[] = [];
+      const props = await getPropertiesBatch(alleRuntimeIds);
       const gefundeneRuntimeIds: number[] = [];
 
-      for (let i = 0; i < props.length; i++) {
-        const obj = props[i];
+      for (const obj of props) {
+        const rId = Number(obj?.id);
+        if (isNaN(rId)) continue;
         let hit = false;
         for (const g of (obj?.properties || [])) {
           if (hit) break;
+          const psetName = g?.name || g?.displayName || "Eigenschaften";
+          // Nur im richtigen PSet suchen
+          if (psetName !== selectedAttr.pset) continue;
           for (const p of (g?.properties || [])) {
-            if (p?.name?.toLowerCase().includes(attributKey.toLowerCase()) &&
-              String(p?.value ?? "").toLowerCase().includes(attributValue.toLowerCase())) {
-              // obj.id ist die GUID falls vorhanden, sonst Runtime ID als String
-              const id = obj?.id ?? String(runtimeIds[i]);
-              gefundeneIds.push(String(id));
-              gefundeneRuntimeIds.push(runtimeIds[i]);
-              hit = true; break;
+            if (hit) break;
+            if (p?.name === selectedAttr.name) {
+              const val = String(p?.value ?? "").trim();
+              const suchVal = attributValue.trim();
+              // Exakter Match ODER enthält (je nach Länge)
+              if (val === suchVal || val.toLowerCase().includes(suchVal.toLowerCase())) {
+                gefundeneRuntimeIds.push(rId);
+                hit = true;
+              }
             }
           }
         }
       }
 
-      if (!gefundeneIds.length) {
-        setMeldung({ text: "Keine Bauteile mit diesem Attribut gefunden.", typ: "err" });
+      if (!gefundeneRuntimeIds.length) {
+        setMeldung({ text: `Keine Bauteile mit ${selectedAttr.name} = "${attributValue}" gefunden.`, typ: "err" });
         setLaden(false); return;
       }
 
       await api.viewer.setSelection(gefundeneRuntimeIds);
+      const guids = gefundeneRuntimeIds.map(String);
       setTasks(tasks.map(t => t.id === taskId
-        ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...gefundeneIds])] } : t));
-      setMeldung({ text: `✓ ${gefundeneIds.length} Bauteile gefunden und markiert.`, typ: "ok" });
+        ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...guids])] } : t));
+      setMeldung({ text: `✓ ${gefundeneRuntimeIds.length} Bauteile gefunden und markiert.`, typ: "ok" });
     } catch (e) {
       console.error("perAttr:", e);
       setMeldung({ text: "Fehler bei Suche.", typ: "err" });
@@ -169,49 +187,23 @@ async function getProperties(runtimeIds: number[]) {
 
   async function perKlickZuweisen(taskId: string) {
     if (!selektion.length) { setMeldung({ text: "Keine Bauteile ausgewählt.", typ: "err" }); return; }
-    if (!api || !aktivesModellId) { setMeldung({ text: "Kein Modell aktiv.", typ: "err" }); return; }
-    try {
-      // Selektion enthält Runtime IDs → Properties holen um GUID zu lesen
-      const props = await getProperties(selektion);
-      let guids: string[];
-
-      if (props.length > 0 && props[0]?.id) {
-        // obj.id ist die echte GUID
-        guids = props.map((obj: any) => String(obj.id)).filter(Boolean);
-        console.log("GUIDs aus Properties:", guids);
-      } else {
-        // Fallback: Runtime IDs als strings
-        guids = selektion.map(String);
-        console.log("Fallback Runtime IDs:", guids);
-      }
-
-      if (!guids.length) { setMeldung({ text: "Keine GUIDs gefunden.", typ: "err" }); return; }
-      setTasks(tasks.map(t => t.id === taskId
-        ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...guids])] } : t));
-      setMeldung({ text: `✓ ${guids.length} Bauteile übernommen.`, typ: "ok" });
-    } catch (e) {
-      console.error("perKlick:", e);
-      // Letzter Fallback
-      const guids = selektion.map(String);
-      setTasks(tasks.map(t => t.id === taskId
-        ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...guids])] } : t));
-      setMeldung({ text: `✓ ${guids.length} Bauteile übernommen (Runtime IDs).`, typ: "ok" });
-    }
+    const guids = selektion.map(String);
+    setTasks(tasks.map(t => t.id === taskId
+      ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...guids])] } : t));
+    setMeldung({ text: `✓ ${guids.length} Bauteile übernommen.`, typ: "ok" });
   }
 
   if (!aktivesModellId) return (
     <div className="panel">
-      <div className="alert warn">⚠ Kein Modell erkannt. Öffne "Modelle" Tab.</div>
+      <div className="alert warn">⚠ Kein Modell aktiv.</div>
     </div>
   );
 
   return (
-    <div className="panel" ref={panelRef} onClick={() => { setShowKeyDrop(false); setShowValueDrop(false); }}>
+    <div className="panel" ref={panelRef} onClick={() => { setShowAttrDrop(false); setShowValueDrop(false); }}>
       <div className="section-header">
         <span>Bauteile zuweisen</span>
-        {selektion.length > 0 && (
-          <span style={{ color: "var(--blue)", fontSize: 10 }}>● {selektion.length} ausgewählt</span>
-        )}
+        {selektion.length > 0 && <span style={{ color: "var(--blue)", fontSize: 10 }}>● {selektion.length} ausgewählt</span>}
       </div>
 
       {meldung && (
@@ -219,8 +211,6 @@ async function getProperties(runtimeIds: number[]) {
           {meldung.text}
         </div>
       )}
-
-      {!tasks.length && <div className="empty-state"><p>Zuerst Gantt-Datei laden.</p></div>}
 
       {tasks.map(task => (
         <div key={task.id} className={`task-card ${aktiverTask === task.id ? "offen" : ""}`}>
@@ -240,12 +230,12 @@ async function getProperties(runtimeIds: number[]) {
 
           {aktiverTask === task.id && (
             <div className="task-detail" onClick={e => e.stopPropagation()}>
+
               <div className="detail-block">
                 <div className="sub-label">Task-Typ</div>
                 <div className="typ-auswahl">
                   {(["neubau", "bestand", "abbruch"] as TaskTyp[]).map(typ => (
-                    <button key={typ}
-                      className={`typ-btn ${task.typ === typ ? `aktiv-${typ}` : ""}`}
+                    <button key={typ} className={`typ-btn ${task.typ === typ ? `aktiv-${typ}` : ""}`}
                       onClick={() => typAendern(task.id, typ)}>
                       {typ === "neubau" ? "🟢" : typ === "bestand" ? "🟡" : "🔴"} {typ}
                     </button>
@@ -257,42 +247,68 @@ async function getProperties(runtimeIds: number[]) {
                 <div className="sub-label">
                   IFC-Attribut Filter
                   {attributeLaden && <span className="laden-text"> ⟳ Lade...</span>}
-                  {Object.keys(attributMap).length > 0 && (
-                    <span className="laden-text"> · {Object.keys(attributMap).length} Attr.</span>
-                  )}
+                  {allAttrs.length > 0 && <span className="laden-text"> · {allAttrs.length} Attribute</span>}
                 </div>
+
+                {/* Attribut Suche mit PSet Anzeige */}
                 <div className="autocomplete-wrap" onClick={e => e.stopPropagation()}>
-                  <input className="attr-input"
-                    placeholder="Attributname (z.B. Material, Type...)"
-                    value={attributKey}
-                    onChange={e => onKeyChange(e.target.value)}
-                    onFocus={() => keyVorschlaege.length > 0 && setShowKeyDrop(true)} />
-                  {showKeyDrop && (
+                  <input
+                    className="attr-input"
+                    placeholder="PSet oder Attribut suchen..."
+                    value={attrSuche}
+                    onChange={e => {
+                      setAttrSuche(e.target.value);
+                      setSelectedAttr(null);
+                      setShowAttrDrop(true);
+                    }}
+                    onFocus={() => setShowAttrDrop(true)}
+                  />
+                  {showAttrDrop && gefilterteAttrs().length > 0 && (
                     <div className="dropdown">
-                      {keyVorschlaege.map(k => (
-                        <div key={k} className="dropdown-item" onMouseDown={() => selectKey(k)}>{k}</div>
+                      {gefilterteAttrs().map(a => (
+                        <div key={a.key} className="dropdown-item" onMouseDown={() => selectAttr(a)}>
+                          <span style={{ color: "var(--text-muted)", fontSize: 10 }}>{a.pset} › </span>
+                          <strong>{a.name}</strong>
+                        </div>
                       ))}
                     </div>
                   )}
                 </div>
+
+                {/* Wert */}
                 <div className="autocomplete-wrap" onClick={e => e.stopPropagation()}>
-                  <input className="attr-input"
-                    placeholder="Wert (z.B. Beton NPK B, OG1...)"
+                  <input
+                    className="attr-input"
+                    placeholder="Wert eingeben oder auswählen..."
                     value={attributValue}
-                    onChange={e => onValueChange(e.target.value)}
-                    onFocus={() => valueVorschlaege.length > 0 && setShowValueDrop(true)} />
-                  {showValueDrop && (
+                    disabled={!selectedAttr}
+                    onChange={e => {
+                      setAttributValue(e.target.value);
+                      if (selectedAttr) {
+                        const w = [...(attributMap[selectedAttr.key] || [])]
+                          .filter(v => v.toLowerCase().includes(e.target.value.toLowerCase()))
+                          .slice(0, 10);
+                        setValueVorschlaege(w);
+                        setShowValueDrop(w.length > 0);
+                      }
+                    }}
+                    onFocus={() => valueVorschlaege.length > 0 && setShowValueDrop(true)}
+                  />
+                  {showValueDrop && valueVorschlaege.length > 0 && (
                     <div className="dropdown">
                       {valueVorschlaege.map(v => (
                         <div key={v} className="dropdown-item"
-                          onMouseDown={() => { setAttributValue(v); setShowValueDrop(false); }}>{v}</div>
+                          onMouseDown={() => { setAttributValue(v); setShowValueDrop(false); }}>
+                          {v}
+                        </div>
                       ))}
                     </div>
                   )}
                 </div>
+
                 <button className="btn-primary"
                   onClick={() => perAttributZuweisen(task.id)}
-                  disabled={laden || !attributKey || !attributValue}>
+                  disabled={laden || !selectedAttr || !attributValue.trim()}>
                   {laden ? "⟳ Suche..." : "🔍 Suchen & Markieren"}
                 </button>
               </div>
@@ -300,9 +316,7 @@ async function getProperties(runtimeIds: number[]) {
               <div className="detail-block">
                 <div className="sub-label">Mausklick Zuweisung</div>
                 <div className={`selektion-status ${selektion.length > 0 ? "aktiv" : ""}`}>
-                  {selektion.length > 0
-                    ? `✓ ${selektion.length} Bauteil(e) ausgewählt`
-                    : "Bauteile im 3D Viewer anklicken"}
+                  {selektion.length > 0 ? `✓ ${selektion.length} Bauteil(e) ausgewählt` : "Im 3D Viewer anklicken"}
                 </div>
                 <button className="btn-secondary"
                   onClick={() => perKlickZuweisen(task.id)}
@@ -316,12 +330,9 @@ async function getProperties(runtimeIds: number[]) {
                   <div className="sub-label-row">
                     <span>{task.objektGuids.length} Bauteile</span>
                     <div style={{ display: "flex", gap: 4 }}>
-                      <button className="btn-xs" onClick={() => markiereImViewer(task.objektGuids)}>
-                        👁 Markieren
-                      </button>
+                      <button className="btn-xs" onClick={() => markiereImViewer(task.objektGuids)}>👁 Markieren</button>
                       <button className="btn-xs danger"
-                        onClick={() => setTasks(tasks.map(t =>
-                          t.id === task.id ? { ...t, objektGuids: [] } : t))}>
+                        onClick={() => setTasks(tasks.map(t => t.id === task.id ? { ...t, objektGuids: [] } : t))}>
                         🗑 Alle
                       </button>
                     </div>
@@ -331,10 +342,8 @@ async function getProperties(runtimeIds: number[]) {
                       <div key={guid} className="guid-item">
                         <span className="guid-text">{guid.slice(0, 22)}...</span>
                         <button className="btn-remove"
-                          onClick={() => setTasks(tasks.map(t =>
-                            t.id === task.id
-                              ? { ...t, objektGuids: t.objektGuids.filter(g => g !== guid) }
-                              : t))}>✕</button>
+                          onClick={() => setTasks(tasks.map(t => t.id === task.id
+                            ? { ...t, objektGuids: t.objektGuids.filter(g => g !== guid) } : t))}>✕</button>
                       </div>
                     ))}
                   </div>
