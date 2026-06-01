@@ -27,29 +27,31 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
   const [showValueDrop, setShowValueDrop] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  async function zuExternalIds(runtimeIds: number[]): Promise<string[]> {
+  // Runtime IDs direkt für getObjectProperties nutzen
+  async function getProperties(runtimeIds: number[]) {
     try {
-      const result = await api.viewer.convertToExternalIds(aktivesModellId, runtimeIds);
-      const arr = Array.isArray(result) ? result.filter(Boolean) : [];
-      if (arr.length > 0) return arr;
-    } catch (e) { console.warn("convertToExternalIds:", e); }
-    try {
-      const result = await api.viewer.convertToObjectIds(aktivesModellId, runtimeIds);
-      const arr = Array.isArray(result) ? result.filter(Boolean) : [];
-      if (arr.length > 0) return arr;
-    } catch (e) { console.warn("convertToObjectIds:", e); }
-    return runtimeIds.map(String);
+      const result = await api.viewer.getObjectProperties(aktivesModellId, runtimeIds);
+      if (Array.isArray(result) && result.length > 0) {
+        console.log("✅ Properties mit Runtime IDs:", result.length, "obj.id sample:", result[0]?.id);
+        return result;
+      }
+    } catch (e) { console.warn("getObjectProperties runtime:", e); }
+    return [];
   }
 
-  async function zuRuntimeIds(guids: string[]): Promise<number[]> {
+  async function markiereImViewer(guids: string[]) {
+    if (!api || !aktivesModellId || !guids.length) return;
     try {
-      const result = await api.viewer.convertToObjectRuntimeIds(aktivesModellId, guids);
-      return Array.isArray(result) ? result.map(Number).filter(n => !isNaN(n)) : [];
-    } catch (e) {
-      console.warn("convertToObjectRuntimeIds:", e);
-      const nums = guids.map(Number).filter(n => !isNaN(n));
-      return nums;
-    }
+      // Versuche als Runtime IDs (falls wir Runtime IDs als strings gespeichert haben)
+      const nums = guids.map(Number).filter(n => !isNaN(n) && n >= 0);
+      if (nums.length === guids.length) {
+        await api.viewer.setSelection(nums);
+        return;
+      }
+      // Versuche convertToObjectRuntimeIds (für echte GUIDs)
+      const runtimeIds = await api.viewer.convertToObjectRuntimeIds(aktivesModellId, guids);
+      await api.viewer.setSelection(runtimeIds);
+    } catch (e) { console.warn("markiere:", e); }
   }
 
   async function ladeAttribute() {
@@ -57,19 +59,15 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
     setAttributeLaden(true);
     try {
       const rohe = await api.viewer.getObjects(aktivesModellId);
-      console.log("getObjects:", JSON.stringify(rohe)?.slice(0, 200));
       const runtimeIds = parseObjectIds(rohe).slice(0, 150);
+      console.log("Lade Properties für", runtimeIds.length, "Runtime IDs");
       if (!runtimeIds.length) { setAttributeLaden(false); return; }
 
-      // FIX: Runtime IDs → External IDs für getObjectProperties
-      const externalIds = await zuExternalIds(runtimeIds);
-      console.log("External IDs sample:", externalIds.slice(0, 3));
-
-      const props = await api.viewer.getObjectProperties(aktivesModellId, externalIds);
-      console.log("Properties sample:", JSON.stringify(props)?.slice(0, 300));
+      const props = await getProperties(runtimeIds);
+      console.log("Props sample:", JSON.stringify(props[0])?.slice(0, 300));
 
       const map: AttributMap = {};
-      for (const obj of (Array.isArray(props) ? props : [])) {
+      for (const obj of props) {
         for (const g of (obj?.properties || [])) {
           for (const p of (g?.properties || [])) {
             if (!p?.name) continue;
@@ -79,7 +77,7 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
         }
       }
       setAttributMap(map);
-      console.log("✅ Attribute geladen:", Object.keys(map).length);
+      console.log("✅ Attribute geladen:", Object.keys(map).length, Object.keys(map).slice(0, 5));
     } catch (e) { console.error("ladeAttribute:", e); }
     finally { setAttributeLaden(false); }
   }
@@ -108,14 +106,6 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
     setTasks(tasks.map(t => t.id === id ? { ...t, typ } : t));
   }
 
-  async function markiereImViewer(guids: string[]) {
-    if (!api || !aktivesModellId || !guids.length) return;
-    try {
-      const runtimeIds = await zuRuntimeIds(guids);
-      if (runtimeIds.length) await api.viewer.setSelection(runtimeIds);
-    } catch (e) { console.warn("markiere:", e); }
-  }
-
   async function taskAnklicken(taskId: string) {
     const neu = aktiverTask === taskId ? null : taskId;
     setAktiverTask(neu); setMeldung(null);
@@ -138,14 +128,11 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
       const runtimeIds = parseObjectIds(rohe);
       if (!runtimeIds.length) { setMeldung({ text: "Keine Objekte gefunden.", typ: "err" }); setLaden(false); return; }
 
-      // Runtime IDs → External IDs für Properties
-      const externalIds = await zuExternalIds(runtimeIds);
-      const props = await api.viewer.getObjectProperties(aktivesModellId, externalIds);
+      const props = await getProperties(runtimeIds);
+      const gefundeneIds: string[] = [];
+      const gefundeneRuntimeIds: number[] = [];
 
-      const getroffeneExtIds: string[] = [];
-      const getroffeneRuntimeIds: number[] = [];
-
-      for (let i = 0; i < (Array.isArray(props) ? props.length : 0); i++) {
+      for (let i = 0; i < props.length; i++) {
         const obj = props[i];
         let hit = false;
         for (const g of (obj?.properties || [])) {
@@ -153,23 +140,25 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
           for (const p of (g?.properties || [])) {
             if (p?.name?.toLowerCase().includes(attributKey.toLowerCase()) &&
               String(p?.value ?? "").toLowerCase().includes(attributValue.toLowerCase())) {
-              if (externalIds[i]) getroffeneExtIds.push(externalIds[i]);
-              if (runtimeIds[i] != null) getroffeneRuntimeIds.push(runtimeIds[i]);
+              // obj.id ist die GUID falls vorhanden, sonst Runtime ID als String
+              const id = obj?.id ?? String(runtimeIds[i]);
+              gefundeneIds.push(String(id));
+              gefundeneRuntimeIds.push(runtimeIds[i]);
               hit = true; break;
             }
           }
         }
       }
 
-      if (!getroffeneExtIds.length) {
+      if (!gefundeneIds.length) {
         setMeldung({ text: "Keine Bauteile mit diesem Attribut gefunden.", typ: "err" });
         setLaden(false); return;
       }
 
-      await api.viewer.setSelection(getroffeneRuntimeIds);
+      await api.viewer.setSelection(gefundeneRuntimeIds);
       setTasks(tasks.map(t => t.id === taskId
-        ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...getroffeneExtIds])] } : t));
-      setMeldung({ text: `✓ ${getroffeneExtIds.length} Bauteile gefunden und markiert.`, typ: "ok" });
+        ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...gefundeneIds])] } : t));
+      setMeldung({ text: `✓ ${gefundeneIds.length} Bauteile gefunden und markiert.`, typ: "ok" });
     } catch (e) {
       console.error("perAttr:", e);
       setMeldung({ text: "Fehler bei Suche.", typ: "err" });
@@ -180,15 +169,31 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
     if (!selektion.length) { setMeldung({ text: "Keine Bauteile ausgewählt.", typ: "err" }); return; }
     if (!api || !aktivesModellId) { setMeldung({ text: "Kein Modell aktiv.", typ: "err" }); return; }
     try {
-      const guids = await zuExternalIds(selektion);
-      const arr = guids.filter(Boolean);
-      if (!arr.length) { setMeldung({ text: "GUIDs konnten nicht gelesen werden.", typ: "err" }); return; }
+      // Selektion enthält Runtime IDs → Properties holen um GUID zu lesen
+      const props = await getProperties(selektion);
+      let guids: string[];
+
+      if (props.length > 0 && props[0]?.id) {
+        // obj.id ist die echte GUID
+        guids = props.map((obj: any) => String(obj.id)).filter(Boolean);
+        console.log("GUIDs aus Properties:", guids);
+      } else {
+        // Fallback: Runtime IDs als strings
+        guids = selektion.map(String);
+        console.log("Fallback Runtime IDs:", guids);
+      }
+
+      if (!guids.length) { setMeldung({ text: "Keine GUIDs gefunden.", typ: "err" }); return; }
       setTasks(tasks.map(t => t.id === taskId
-        ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...arr])] } : t));
-      setMeldung({ text: `✓ ${arr.length} Bauteile übernommen.`, typ: "ok" });
+        ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...guids])] } : t));
+      setMeldung({ text: `✓ ${guids.length} Bauteile übernommen.`, typ: "ok" });
     } catch (e) {
       console.error("perKlick:", e);
-      setMeldung({ text: "Fehler beim Übernehmen.", typ: "err" });
+      // Letzter Fallback
+      const guids = selektion.map(String);
+      setTasks(tasks.map(t => t.id === taskId
+        ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...guids])] } : t));
+      setMeldung({ text: `✓ ${guids.length} Bauteile übernommen (Runtime IDs).`, typ: "ok" });
     }
   }
 
@@ -251,27 +256,26 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
                   IFC-Attribut Filter
                   {attributeLaden && <span className="laden-text"> ⟳ Lade...</span>}
                   {Object.keys(attributMap).length > 0 && (
-                    <span className="laden-text"> · {Object.keys(attributMap).length} Attribute</span>
+                    <span className="laden-text"> · {Object.keys(attributMap).length} Attr.</span>
                   )}
                 </div>
                 <div className="autocomplete-wrap" onClick={e => e.stopPropagation()}>
                   <input className="attr-input"
-                    placeholder="Attributname (z.B. Geschoss, Type...)"
+                    placeholder="Attributname (z.B. Material, Type...)"
                     value={attributKey}
                     onChange={e => onKeyChange(e.target.value)}
                     onFocus={() => keyVorschlaege.length > 0 && setShowKeyDrop(true)} />
                   {showKeyDrop && (
                     <div className="dropdown">
                       {keyVorschlaege.map(k => (
-                        <div key={k} className="dropdown-item"
-                          onMouseDown={() => selectKey(k)}>{k}</div>
+                        <div key={k} className="dropdown-item" onMouseDown={() => selectKey(k)}>{k}</div>
                       ))}
                     </div>
                   )}
                 </div>
                 <div className="autocomplete-wrap" onClick={e => e.stopPropagation()}>
                   <input className="attr-input"
-                    placeholder="Wert (z.B. OG1, Beton...)"
+                    placeholder="Wert (z.B. Beton NPK B, OG1...)"
                     value={attributValue}
                     onChange={e => onValueChange(e.target.value)}
                     onFocus={() => valueVorschlaege.length > 0 && setShowValueDrop(true)} />
@@ -310,8 +314,7 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
                   <div className="sub-label-row">
                     <span>{task.objektGuids.length} Bauteile</span>
                     <div style={{ display: "flex", gap: 4 }}>
-                      <button className="btn-xs"
-                        onClick={() => markiereImViewer(task.objektGuids)}>
+                      <button className="btn-xs" onClick={() => markiereImViewer(task.objektGuids)}>
                         👁 Markieren
                       </button>
                       <button className="btn-xs danger"
