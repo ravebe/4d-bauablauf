@@ -6,6 +6,8 @@ interface Props {
   tasks: Task[];
   setTasks: (t: Task[]) => void;
   ganttAktualisieren: (t: Task[]) => void;
+  onNachImport?: (t: Task[]) => void;
+  kompakt?: boolean;
 }
 
 const VORLAGE = [
@@ -39,10 +41,11 @@ async function parseFile(file: File): Promise<Task[]> {
             const name = t.querySelector("Name")?.textContent || "";
             const start = t.querySelector("Start")?.textContent?.slice(0, 10) || "";
             const end = t.querySelector("Finish")?.textContent?.slice(0, 10) || "";
-            if (id && name && name !== "0") tasks.push({ id, name, start, end, typ: "neubau", objektGuids: [] });
+            if (id && name && name !== "0")
+              tasks.push({ id, name, start, end, typ: "neubau", objektGuids: [] });
           });
           resolve(tasks);
-        } catch { reject("XML Fehler"); }
+        } catch { reject("XML konnte nicht gelesen werden."); }
       };
       reader.readAsText(file);
     } else {
@@ -52,89 +55,75 @@ async function parseFile(file: File): Promise<Task[]> {
           const data = new Uint8Array(ev.target?.result as ArrayBuffer);
           const wb = XLSX.read(data, { type: "array" });
           const rows: Record<string, string>[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+          if (rows.length === 0) throw new Error("Keine Zeilen gefunden.");
           const tasks: Task[] = rows.map((row, i) => ({
             id: String(i + 1),
-            name: row["Name"] || row["Aufgabe"] || row["Task"] || `Task ${i + 1}`,
-            start: row["Start"] || row["Startdatum"] || "",
-            end: row["Ende"] || row["Enddatum"] || row["Finish"] || "",
-            typ: (row["Typ"] as TaskTyp) || "neubau",
+            name: String(row["Name"] || row["Aufgabe"] || row["Task"] || ""),
+            start: String(row["Start"] || row["Startdatum"] || ""),
+            end: String(row["Ende"] || row["Enddatum"] || row["Finish"] || ""),
+            typ: (String(row["Typ"] || "neubau").toLowerCase() as TaskTyp),
             objektGuids: [],
           }));
           resolve(tasks);
-        } catch { reject("Excel Fehler"); }
+        } catch (e) { reject(String(e)); }
       };
       reader.readAsArrayBuffer(file);
     }
   });
 }
 
-export default function GanttImport({ tasks, setTasks, ganttAktualisieren }: Props) {
+export default function GanttImport({ tasks, setTasks, ganttAktualisieren, onNachImport, kompakt }: Props) {
   const [fehler, setFehler] = useState("");
-  const [preview, setPreview] = useState(false);
-  const hatTasks = tasks.length > 0;
+  const [erfolg, setErfolg] = useState("");
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setFehler("");
+    setFehler(""); setErfolg("");
     try {
       const geladen = await parseFile(file);
-      if (hatTasks) ganttAktualisieren(geladen);
+      if (geladen.length === 0) {
+        setFehler("Ungültige Datei – keine Tasks gefunden.");
+        return;
+      }
+      if (tasks.length > 0) ganttAktualisieren(geladen);
       else setTasks(geladen);
-    } catch { setFehler("Datei konnte nicht gelesen werden."); }
+      onNachImport?.(geladen);
+      setErfolg(`✓ ${geladen.length} Tasks importiert`);
+    } catch (err) {
+      setFehler(`Ungültige Datei – ${String(err)}`);
+    }
     e.target.value = "";
   }
 
   return (
     <div>
-      <label className="gantt-upload">
-        <div className="gantt-upload-icon">📂</div>
-        <div className="gantt-upload-text">{hatTasks ? "Gantt ersetzen" : "Datei auswählen"}</div>
+      {!kompakt && (
+        <div style={{ marginBottom: 10 }}>
+          <button className="vorlage-dl-btn" onClick={downloadVorlage}>
+            ⬇ Gantt-Vorlage herunterladen (.xlsx)
+          </button>
+        </div>
+      )}
+
+      <label className="gantt-upload" style={kompakt ? { padding: "10px", marginBottom: 8 } : {}}>
+        <div className="gantt-upload-icon" style={kompakt ? { fontSize: 20, marginBottom: 2 } : {}}>📂</div>
+        <div className="gantt-upload-text" style={kompakt ? { fontSize: 12 } : {}}>
+          {tasks.length > 0 ? "Gantt ersetzen" : "Gantt importieren"}
+        </div>
         <div className="gantt-upload-hint">
-          {hatTasks ? "Bestehende Verknüpfungen bleiben erhalten" : "xlsx oder xml"}
+          {tasks.length > 0 ? "Verknüpfungen bleiben erhalten" : "xlsx oder xml · Pflicht: Name, Start, Ende, Typ"}
         </div>
         <input type="file" accept=".xlsx,.xml" onChange={onFile} style={{ display: "none" }} />
       </label>
 
-      {fehler && <div className="gantt-error">{fehler}</div>}
+      {fehler && <div className="gantt-error">⚠ {fehler}</div>}
+      {erfolg && <div className="gantt-success">{erfolg}</div>}
 
-      <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--tc-text-2)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 6 }}>Excel-Vorlage</div>
-        <div className="vorlage-box">
-          <table>
-            <thead><tr>{["Name", "Start", "Ende", "Typ"].map(h => <th key={h}>{h}</th>)}</tr></thead>
-            <tbody>
-              {VORLAGE.slice(1).map((row, i) => (
-                <tr key={i}>
-                  <td>{row[0]}</td>
-                  <td style={{ fontFamily: "monospace" }}>{row[1]}</td>
-                  <td style={{ fontFamily: "monospace" }}>{row[2]}</td>
-                  <td><span className={`typ-pill ${row[3]}`}>{row[3]}</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <button className="vorlage-dl-btn" onClick={downloadVorlage}>⬇ Vorlage herunterladen</button>
-      </div>
-
-      {hatTasks && (
-        <div className="gantt-preview">
-          <div className="gantt-preview-header">
-            <span>{tasks.length} Tasks geladen</span>
-            <span style={{ color: "var(--tc-blue)", cursor: "pointer" }} onClick={() => setPreview(!preview)}>
-              {preview ? "Ausblenden" : "Vorschau"}
-            </span>
-          </div>
-          {preview && tasks.map(t => (
-            <div key={t.id} className="gantt-row">
-              <span className={`gantt-dot ${t.typ}`} />
-              <span className="gantt-name">{t.name}</span>
-              <span className="gantt-date">{t.start}</span>
-              {t.objektGuids.length > 0 && <span style={{ fontSize: 10, color: "var(--tc-blue)" }}>⬡ {t.objektGuids.length}</span>}
-            </div>
-          ))}
-        </div>
+      {kompakt && (
+        <button className="vorlage-dl-btn" onClick={downloadVorlage} style={{ fontSize: 11, padding: "5px 10px" }}>
+          ⬇ Vorlage
+        </button>
       )}
     </div>
   );
