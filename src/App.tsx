@@ -3,42 +3,54 @@ import { useApi } from "./hooks/useApi";
 import type { Task } from "./types";
 import GanttTabelle from "./components/GanttTabelle.tsx";
 import GanttImport from "./components/GanttImport";
+import ModellVerwaltung from "./components/ModellVerwaltung";
 import TaskList from "./components/TaskList";
 import SimulationPlayer from "./components/SimulationPlayer";
 
 const SIMS_KEY = "4d-sims-v2";
 const AKTIV_KEY = "4d-aktiv-v2";
 
-interface SimProjekt {
+export interface ModellInfo {
+  fileId: string;
+  name: string;
+  versionId?: string;
+  neueVersion?: boolean;
+}
+
+export interface SimProjekt {
   id: string;
   name: string;
   ersteltAm: string;
   tasks: Task[];
+  modelle: ModellInfo[];
 }
 
 function ladeSims(): SimProjekt[] {
   try { const r = localStorage.getItem(SIMS_KEY); if (r) return JSON.parse(r); } catch {}
   return [];
 }
-function speichereSims(sims: SimProjekt[]) {
-  try { localStorage.setItem(SIMS_KEY, JSON.stringify(sims)); } catch {}
-}
+function speichereSims(s: SimProjekt[]) { try { localStorage.setItem(SIMS_KEY, JSON.stringify(s)); } catch {} }
 function ladeAktivId(): string { return localStorage.getItem(AKTIV_KEY) || ""; }
 function speichereAktivId(id: string) { localStorage.setItem(AKTIV_KEY, id); }
 
 export default function App() {
-const { api, connected, isViewerContext, projectId, viewerState } = useApi();
+  const { api, connected, isViewerContext, accessToken, projectId, viewerState } = useApi();
   const [simulationen, setSimulationenRaw] = useState<SimProjekt[]>(ladeSims);
   const [aktivId, setAktivIdRaw] = useState<string>(ladeAktivId);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [neueSimAktiv, setNeueSimAktiv] = useState(false);
   const [neueTasks, setNeueTasks] = useState<Task[]>([]);
+  const [neueModelle, setNeueModelle] = useState<ModellInfo[]>([]);
   const [aktivTab, setAktivTab] = useState<"bauteile" | "simulation">("bauteile");
   const [umbenennenId, setUmbenennenId] = useState<string | null>(null);
   const [umbenennenText, setUmbenennenText] = useState("");
 
   function setSimulationen(sims: SimProjekt[]) { setSimulationenRaw(sims); speichereSims(sims); }
   function setAktivId(id: string) { setAktivIdRaw(id); speichereAktivId(id); }
+
+  function updateSim(id: string, changes: Partial<SimProjekt>) {
+    setSimulationen(simulationen.map(s => s.id === id ? { ...s, ...changes } : s));
+  }
 
   function umbenennenStart(sim: SimProjekt, e: React.MouseEvent) {
     e.stopPropagation();
@@ -48,20 +60,24 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
 
   function umbenennenSpeichern() {
     if (!umbenennenId || !umbenennenText.trim()) { setUmbenennenId(null); return; }
-    setSimulationen(simulationen.map(s => s.id === umbenennenId ? { ...s, name: umbenennenText.trim() } : s));
+    updateSim(umbenennenId, { name: umbenennenText.trim() });
     setUmbenennenId(null);
   }
 
-  function neueSimSpeichern(tasks: Task[]) {
+  function neueSimSpeichern() {
     const id = Date.now().toString();
     const sim: SimProjekt = {
-      id, name: `Simulation ${simulationen.length + 1}`,
-      ersteltAm: new Date().toLocaleDateString("de-CH"), tasks,
+      id,
+      name: `Simulation ${simulationen.length + 1}`,
+      ersteltAm: new Date().toLocaleDateString("de-CH"),
+      tasks: neueTasks,
+      modelle: neueModelle,
     };
     const neu = [...simulationen, sim];
     setSimulationen(neu);
     setAktivId(id);
     setNeueTasks([]);
+    setNeueModelle([]);
     setNeueSimAktiv(false);
     setExpandedId(id);
   }
@@ -78,9 +94,12 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
   function simBearbeiten(sim: SimProjekt) {
     setAktivId(sim.id);
     speichereSims(simulationen);
-    // Flag setzen damit Viewer-Tab weiss er soll Viewer-UI zeigen
     localStorage.setItem("4d-viewer-mode", "true");
-    const url = `https://web.connect.trimble.com/projects/${projectId}/viewer/3d`;
+    // Erstes Modell in URL mitgeben → TC lädt es automatisch
+    const modelParam = sim.modelle.length > 0
+      ? `?modelId=${encodeURIComponent(sim.modelle[0].versionId || sim.modelle[0].fileId)}`
+      : "";
+    const url = `https://web.connect.trimble.com/projects/${projectId}/viewer/3d${modelParam}`;
     window.open(url, "_blank");
   }
 
@@ -91,16 +110,17 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
       const alt = aktuell.tasks.find(x => x.name.toLowerCase() === neu.name.toLowerCase());
       return alt ? { ...neu, typ: alt.typ, objektGuids: alt.objektGuids } : neu;
     });
-    setSimulationen(simulationen.map(s => s.id === simId ? { ...s, tasks: merged } : s));
+    updateSim(simId, { tasks: merged });
   }
 
   const aktivSim = simulationen.find(s => s.id === aktivId) || simulationen[0];
 
   // ════════════════════════════════════════════════════════
-  // 3D VIEWER – komplett eigenes Tool
+  // 3D VIEWER
   // ════════════════════════════════════════════════════════
   if (isViewerContext) {
     const tasks = aktivSim?.tasks || [];
+    const modelle = aktivSim?.modelle || [];
 
     function setTasks(t: Task[]) {
       if (!aktivSim) return;
@@ -111,7 +131,6 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
 
     return (
       <div className="app viewer-app">
-        {/* Viewer Header */}
         <div className="tc-header">
           <div className="tc-header-left">
             <div className="tc-logo">4D</div>
@@ -125,7 +144,13 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
           </div>
         </div>
 
-        {/* Kein Projekt */}
+        {/* Modell-Banner falls Modelle verknüpft */}
+        {modelle.length > 0 && viewerState.modelle.length === 0 && (
+          <div style={{ padding: "6px 12px", background: "#FFF4CE", borderBottom: "1px solid #FFD700", fontSize: 11, color: "#6B3A00" }}>
+            ⚠ Verknüpfte Modelle: {modelle.map(m => m.name).join(", ")} – bitte im Viewer laden
+          </div>
+        )}
+
         {!aktivSim || tasks.length === 0 ? (
           <div className="tc-empty">
             <div className="tc-empty-icon">📊</div>
@@ -136,7 +161,6 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
           </div>
         ) : (
           <>
-            {/* Viewer Tabs */}
             <div className="tc-tabs">
               <button className={aktivTab === "bauteile" ? "active" : ""} onClick={() => setAktivTab("bauteile")}>
                 <span>🔧</span> Bauteile
@@ -160,11 +184,10 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
   }
 
   // ════════════════════════════════════════════════════════
-  // PROJEKTPANEL – komplett eigenes Tool, kein Toggle-Button
+  // PROJEKTPANEL
   // ════════════════════════════════════════════════════════
   return (
     <div className="app setup-app">
-      {/* Panel Header – KEIN Toggle-Button */}
       <div className="tc-header">
         <div className="tc-header-left">
           <div className="tc-logo">4D</div>
@@ -176,13 +199,10 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
       </div>
 
       <div className="tc-setup-content">
-        {/* Titel + Neu-Button */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
           <div className="tc-section-label" style={{ marginBottom: 0 }}>Simulationen</div>
-          <button
-            className="tc-btn-primary"
-            style={{ padding: "6px 16px", fontSize: 12 }}
-            onClick={() => { setNeueSimAktiv(true); setNeueTasks([]); }}>
+          <button className="tc-btn-primary" style={{ padding: "6px 16px", fontSize: 12 }}
+            onClick={() => { setNeueSimAktiv(true); setNeueTasks([]); setNeueModelle([]); }}>
             + Neu
           </button>
         </div>
@@ -190,7 +210,7 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
         {/* Neue Simulation */}
         {neueSimAktiv && (
           <div style={{ border: "1.5px solid var(--tc-blue)", borderRadius: 8, overflow: "hidden", marginBottom: 12, background: "var(--tc-white)" }}>
-            <div style={{ padding: "10px 14px", background: "var(--tc-blue-light)", borderBottom: "1px solid var(--tc-blue-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ padding: "10px 14px", background: "var(--tc-blue-light)", borderBottom: "1px solid var(--tc-blue-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: 13, fontWeight: 600, color: "var(--tc-blue)" }}>Neue Simulation</span>
               <button style={{ background: "none", border: "none", cursor: "pointer", color: "var(--tc-text-3)", fontSize: 16 }}
                 onClick={() => setNeueSimAktiv(false)}>✕</button>
@@ -205,10 +225,14 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
               {neueTasks.length > 0 && (
                 <>
                   <GanttTabelle tasks={neueTasks} />
-                  <button
-                    className="tc-btn-primary"
-                    style={{ width: "100%", marginTop: 10, padding: "9px 0", fontSize: 13 }}
-                    onClick={() => neueSimSpeichern(neueTasks)}>
+                  <ModellVerwaltung
+                    modelle={neueModelle}
+                    setModelle={setNeueModelle}
+                    accessToken={accessToken}
+                    projectId={projectId}
+                  />
+                  <button className="tc-btn-primary" style={{ width: "100%", marginTop: 10, padding: "9px 0", fontSize: 13 }}
+                    onClick={neueSimSpeichern}>
                     ✓ Simulation erstellen
                   </button>
                 </>
@@ -217,7 +241,6 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
           </div>
         )}
 
-        {/* Leerer Zustand */}
         {simulationen.length === 0 && !neueSimAktiv && (
           <div className="tc-empty" style={{ padding: "32px 0" }}>
             <div className="tc-empty-icon">📊</div>
@@ -233,22 +256,17 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
             borderRadius: 8, overflow: "hidden", marginBottom: 8,
             background: "var(--tc-white)", boxShadow: "var(--tc-shadow)"
           }}>
-            {/* Sim Header */}
-            <div
-              style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
+            <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
               onClick={() => setExpandedId(expandedId === sim.id ? null : sim.id)}>
               <span style={{ fontSize: 22 }}>📊</span>
               <div style={{ flex: 1 }}>
                 {umbenennenId === sim.id ? (
-                  <input
-                    autoFocus
-                    value={umbenennenText}
+                  <input autoFocus value={umbenennenText}
                     onChange={e => setUmbenennenText(e.target.value)}
                     onBlur={umbenennenSpeichern}
                     onKeyDown={e => { if (e.key === "Enter") umbenennenSpeichern(); if (e.key === "Escape") setUmbenennenId(null); }}
                     onClick={e => e.stopPropagation()}
-                    style={{ fontSize: 13, fontWeight: 600, border: "1px solid var(--tc-blue)", borderRadius: 4, padding: "2px 6px", width: "90%", fontFamily: "inherit", color: "var(--tc-text)" }}
-                  />
+                    style={{ fontSize: 13, fontWeight: 600, border: "1px solid var(--tc-blue)", borderRadius: 4, padding: "2px 6px", width: "90%", fontFamily: "inherit", color: "var(--tc-text)" }} />
                 ) : (
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: "var(--tc-text)" }}>{sim.name}</span>
@@ -258,7 +276,7 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
                   </div>
                 )}
                 <div style={{ fontSize: 11, color: "var(--tc-text-3)" }}>
-                  {sim.ersteltAm} · {sim.tasks.length} Tasks
+                  {sim.ersteltAm} · {sim.tasks.length} Tasks · {sim.modelle?.length || 0} Modell(e)
                 </div>
               </div>
               {sim.id === aktivId && (
@@ -267,29 +285,33 @@ const { api, connected, isViewerContext, projectId, viewerState } = useApi();
               <span style={{ fontSize: 11, color: "var(--tc-text-3)" }}>{expandedId === sim.id ? "▲" : "▼"}</span>
             </div>
 
-            {/* Sim Detail */}
             {expandedId === sim.id && (
               <div style={{ borderTop: "1px solid var(--tc-border)", padding: 14 }}>
                 <GanttTabelle tasks={sim.tasks} />
-                <div style={{ marginTop: 10, marginBottom: 10 }}>
+
+                <ModellVerwaltung
+                  modelle={sim.modelle || []}
+                  setModelle={m => updateSim(sim.id, { modelle: m })}
+                  accessToken={accessToken}
+                  projectId={projectId}
+                />
+
+                <div style={{ marginTop: 8, marginBottom: 10 }}>
                   <GanttImport
                     tasks={sim.tasks}
-                    setTasks={t => setSimulationen(simulationen.map(s => s.id === sim.id ? { ...s, tasks: t } : s))}
+                    setTasks={t => updateSim(sim.id, { tasks: t })}
                     ganttAktualisieren={t => ganttAktualisieren(sim.id, t)}
                     onNachImport={t => ganttAktualisieren(sim.id, t)}
                     kompakt={true}
                   />
                 </div>
+
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button
-                    className="tc-btn-primary"
-                    style={{ flex: 1, padding: "9px 0", fontSize: 13 }}
+                  <button className="tc-btn-primary" style={{ flex: 1, padding: "9px 0", fontSize: 13 }}
                     onClick={() => simBearbeiten(sim)}>
                     ✏️ Bearbeiten im 3D Viewer
                   </button>
-                  <button
-                    className="tc-btn-danger"
-                    style={{ padding: "9px 12px" }}
+                  <button className="tc-btn-danger" style={{ padding: "9px 12px" }}
                     onClick={e => simLoeschen(sim.id, e)}>🗑</button>
                 </div>
               </div>
