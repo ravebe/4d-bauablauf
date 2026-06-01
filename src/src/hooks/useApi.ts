@@ -40,11 +40,27 @@ function parseSelIds(data: any): number[] {
   return ids;
 }
 
+// Zuverlässige Viewer-Erkennung
+function istViewerKontext(): boolean {
+  // 1. localStorage Flag (gesetzt wenn "Bearbeiten im 3D Viewer" geklickt)
+  if (typeof localStorage !== "undefined") {
+    if (localStorage.getItem("4d-viewer-mode") === "true") {
+      localStorage.removeItem("4d-viewer-mode");
+      return true;
+    }
+  }
+  // 2. document.referrer prüfen
+  if (typeof document !== "undefined") {
+    const ref = document.referrer || "";
+    if (ref.includes("/viewer/3d") || ref.includes("viewer/3d")) return true;
+  }
+  return false;
+}
+
 export function useApi() {
   const [api, setApi] = useState<any>(null);
   const [connected, setConnected] = useState(false);
-  // Startet immer als FALSE – wird nur true wenn Viewer-Events kommen
-  const [isViewerContext, setIsViewerContext] = useState(false);
+  const [isViewerContext, setIsViewerContext] = useState(istViewerKontext);
   const [accessToken, setAccessToken] = useState("");
   const [projectId, setProjectId] = useState("");
   const [viewerState, setViewerState] = useState<ViewerState>({
@@ -69,21 +85,14 @@ export function useApi() {
         const instance = await WorkspaceAPI.connect(
           window.parent,
           async (event: string, data: any) => {
-            console.log("TC:", event, JSON.stringify(data)?.slice(0, 100));
-
-            // Viewer-Events → wir sind im 3D Viewer
-            if (event === "viewer.onSelectionChanged") {
+            // Jedes viewer.on* Event = wir sind im 3D Viewer
+            if (event.startsWith("viewer.on")) {
               setIsViewerContext(true);
-              const ids = parseSelIds(data);
-              setViewerState(prev => ({ ...prev, selektion: ids }));
             }
 
-            if (event === "viewer.onModelStateChanged" ||
-                event === "viewer.onModelLoaded" ||
-                event === "viewer.onModelsLoaded" ||
-                event === "viewer.onModelAdded" ||
-                event === "viewer.onCameraChanged") {
-              setIsViewerContext(true);
+            if (event === "viewer.onSelectionChanged") {
+              const ids = parseSelIds(data);
+              setViewerState(prev => ({ ...prev, selektion: ids }));
             }
 
             if (event === "extension.accessToken") {
@@ -129,7 +138,7 @@ export function useApi() {
           } catch {}
         }
 
-        // Modelle laden – wenn vorhanden → Viewer Context
+        // Modelle laden – wenn vorhanden = Viewer
         const modelle = await ladeModelle(instance);
         if (modelle.length > 0) {
           setIsViewerContext(true);
