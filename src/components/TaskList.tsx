@@ -27,21 +27,46 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
   const [showValueDrop, setShowValueDrop] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
+  async function zuExternalIds(runtimeIds: number[]): Promise<string[]> {
+    try {
+      const result = await api.viewer.convertToExternalIds(aktivesModellId, runtimeIds);
+      const arr = Array.isArray(result) ? result.filter(Boolean) : [];
+      if (arr.length > 0) return arr;
+    } catch (e) { console.warn("convertToExternalIds:", e); }
+    try {
+      const result = await api.viewer.convertToObjectIds(aktivesModellId, runtimeIds);
+      const arr = Array.isArray(result) ? result.filter(Boolean) : [];
+      if (arr.length > 0) return arr;
+    } catch (e) { console.warn("convertToObjectIds:", e); }
+    return runtimeIds.map(String);
+  }
+
+  async function zuRuntimeIds(guids: string[]): Promise<number[]> {
+    try {
+      const result = await api.viewer.convertToObjectRuntimeIds(aktivesModellId, guids);
+      return Array.isArray(result) ? result.map(Number).filter(n => !isNaN(n)) : [];
+    } catch (e) {
+      console.warn("convertToObjectRuntimeIds:", e);
+      const nums = guids.map(Number).filter(n => !isNaN(n));
+      return nums;
+    }
+  }
+
   async function ladeAttribute() {
     if (!api || !aktivesModellId) return;
     setAttributeLaden(true);
     try {
       const rohe = await api.viewer.getObjects(aktivesModellId);
-      console.log("getObjects:", JSON.stringify(rohe)?.slice(0, 300));
-
-      // Runtime IDs aus [{modelId, objects: [{id:1}...]}] extrahieren
+      console.log("getObjects:", JSON.stringify(rohe)?.slice(0, 200));
       const runtimeIds = parseObjectIds(rohe).slice(0, 150);
-      console.log("Runtime IDs für Properties:", runtimeIds.length);
-
       if (!runtimeIds.length) { setAttributeLaden(false); return; }
 
-      const props = await api.viewer.getObjectProperties(aktivesModellId, runtimeIds);
-      console.log("Properties sample:", JSON.stringify(props)?.slice(0, 400));
+      // FIX: Runtime IDs → External IDs für getObjectProperties
+      const externalIds = await zuExternalIds(runtimeIds);
+      console.log("External IDs sample:", externalIds.slice(0, 3));
+
+      const props = await api.viewer.getObjectProperties(aktivesModellId, externalIds);
+      console.log("Properties sample:", JSON.stringify(props)?.slice(0, 300));
 
       const map: AttributMap = {};
       for (const obj of (Array.isArray(props) ? props : [])) {
@@ -86,8 +111,8 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
   async function markiereImViewer(guids: string[]) {
     if (!api || !aktivesModellId || !guids.length) return;
     try {
-      const ids = await api.viewer.convertToObjectRuntimeIds(aktivesModellId, guids);
-      await api.viewer.setSelection(ids);
+      const runtimeIds = await zuRuntimeIds(guids);
+      if (runtimeIds.length) await api.viewer.setSelection(runtimeIds);
     } catch (e) { console.warn("markiere:", e); }
   }
 
@@ -113,53 +138,38 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
       const runtimeIds = parseObjectIds(rohe);
       if (!runtimeIds.length) { setMeldung({ text: "Keine Objekte gefunden.", typ: "err" }); setLaden(false); return; }
 
-      const props = await api.viewer.getObjectProperties(aktivesModellId, runtimeIds);
+      // Runtime IDs → External IDs für Properties
+      const externalIds = await zuExternalIds(runtimeIds);
+      const props = await api.viewer.getObjectProperties(aktivesModellId, externalIds);
+
+      const getroffeneExtIds: string[] = [];
       const getroffeneRuntimeIds: number[] = [];
 
-      for (const obj of (Array.isArray(props) ? props : [])) {
+      for (let i = 0; i < (Array.isArray(props) ? props.length : 0); i++) {
+        const obj = props[i];
         let hit = false;
         for (const g of (obj?.properties || [])) {
           if (hit) break;
           for (const p of (g?.properties || [])) {
             if (p?.name?.toLowerCase().includes(attributKey.toLowerCase()) &&
               String(p?.value ?? "").toLowerCase().includes(attributValue.toLowerCase())) {
-              getroffeneRuntimeIds.push(Number(obj.id));
+              if (externalIds[i]) getroffeneExtIds.push(externalIds[i]);
+              if (runtimeIds[i] != null) getroffeneRuntimeIds.push(runtimeIds[i]);
               hit = true; break;
             }
           }
         }
       }
 
-      if (!getroffeneRuntimeIds.length) {
+      if (!getroffeneExtIds.length) {
         setMeldung({ text: "Keine Bauteile mit diesem Attribut gefunden.", typ: "err" });
         setLaden(false); return;
       }
 
-      // Markieren im Viewer
       await api.viewer.setSelection(getroffeneRuntimeIds);
-
-      // Runtime IDs → externe GUIDs konvertieren
-      let guids: string[] = [];
-      try {
-        guids = await api.viewer.convertToExternalIds(aktivesModellId, getroffeneRuntimeIds);
-      } catch {
-        try {
-          guids = await api.viewer.convertToObjectIds(aktivesModellId, getroffeneRuntimeIds);
-        } catch (e2) { console.warn("convertToIds:", e2); }
-      }
-
-      const guidsArr = (Array.isArray(guids) ? guids : []).filter(Boolean);
-      if (guidsArr.length) {
-        setTasks(tasks.map(t => t.id === taskId
-          ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...guidsArr])] } : t));
-        setMeldung({ text: `✓ ${guidsArr.length} Bauteile gefunden und markiert.`, typ: "ok" });
-      } else {
-        // Falls GUID-Konvertierung scheitert, Runtime IDs als strings speichern
-        const asStrings = getroffeneRuntimeIds.map(String);
-        setTasks(tasks.map(t => t.id === taskId
-          ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...asStrings])] } : t));
-        setMeldung({ text: `✓ ${getroffeneRuntimeIds.length} Bauteile markiert.`, typ: "ok" });
-      }
+      setTasks(tasks.map(t => t.id === taskId
+        ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...getroffeneExtIds])] } : t));
+      setMeldung({ text: `✓ ${getroffeneExtIds.length} Bauteile gefunden und markiert.`, typ: "ok" });
     } catch (e) {
       console.error("perAttr:", e);
       setMeldung({ text: "Fehler bei Suche.", typ: "err" });
@@ -170,22 +180,9 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
     if (!selektion.length) { setMeldung({ text: "Keine Bauteile ausgewählt.", typ: "err" }); return; }
     if (!api || !aktivesModellId) { setMeldung({ text: "Kein Modell aktiv.", typ: "err" }); return; }
     try {
-      let guids: string[] = [];
-      try {
-        guids = await api.viewer.convertToExternalIds(aktivesModellId, selektion);
-        console.log("convertToExternalIds:", guids);
-      } catch {
-        try {
-          guids = await api.viewer.convertToObjectIds(aktivesModellId, selektion);
-          console.log("convertToObjectIds:", guids);
-        } catch (e2) {
-          // Fallback: Runtime IDs als strings speichern
-          console.warn("Beide Konvertierungen fehlgeschlagen, nutze Runtime IDs");
-          guids = selektion.map(String);
-        }
-      }
-
-      const arr = (Array.isArray(guids) ? guids : []).filter(Boolean);
+      const guids = await zuExternalIds(selektion);
+      const arr = guids.filter(Boolean);
+      if (!arr.length) { setMeldung({ text: "GUIDs konnten nicht gelesen werden.", typ: "err" }); return; }
       setTasks(tasks.map(t => t.id === taskId
         ? { ...t, objektGuids: [...new Set([...t.objektGuids, ...arr])] } : t));
       setMeldung({ text: `✓ ${arr.length} Bauteile übernommen.`, typ: "ok" });
@@ -240,7 +237,8 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
                 <div className="sub-label">Task-Typ</div>
                 <div className="typ-auswahl">
                   {(["neubau", "bestand", "abbruch"] as TaskTyp[]).map(typ => (
-                    <button key={typ} className={`typ-btn ${task.typ === typ ? `aktiv-${typ}` : ""}`}
+                    <button key={typ}
+                      className={`typ-btn ${task.typ === typ ? `aktiv-${typ}` : ""}`}
                       onClick={() => typAendern(task.id, typ)}>
                       {typ === "neubau" ? "🟢" : typ === "bestand" ? "🟡" : "🔴"} {typ}
                     </button>
@@ -265,7 +263,8 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
                   {showKeyDrop && (
                     <div className="dropdown">
                       {keyVorschlaege.map(k => (
-                        <div key={k} className="dropdown-item" onMouseDown={() => selectKey(k)}>{k}</div>
+                        <div key={k} className="dropdown-item"
+                          onMouseDown={() => selectKey(k)}>{k}</div>
                       ))}
                     </div>
                   )}
@@ -311,11 +310,13 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
                   <div className="sub-label-row">
                     <span>{task.objektGuids.length} Bauteile</span>
                     <div style={{ display: "flex", gap: 4 }}>
-                      <button className="btn-xs" onClick={() => markiereImViewer(task.objektGuids)}>
+                      <button className="btn-xs"
+                        onClick={() => markiereImViewer(task.objektGuids)}>
                         👁 Markieren
                       </button>
                       <button className="btn-xs danger"
-                        onClick={() => setTasks(tasks.map(t => t.id === task.id ? { ...t, objektGuids: [] } : t))}>
+                        onClick={() => setTasks(tasks.map(t =>
+                          t.id === task.id ? { ...t, objektGuids: [] } : t))}>
                         🗑 Alle
                       </button>
                     </div>
@@ -325,8 +326,10 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
                       <div key={guid} className="guid-item">
                         <span className="guid-text">{guid.slice(0, 22)}...</span>
                         <button className="btn-remove"
-                          onClick={() => setTasks(tasks.map(t => t.id === task.id
-                            ? { ...t, objektGuids: t.objektGuids.filter(g => g !== guid) } : t))}>✕</button>
+                          onClick={() => setTasks(tasks.map(t =>
+                            t.id === task.id
+                              ? { ...t, objektGuids: t.objektGuids.filter(g => g !== guid) }
+                              : t))}>✕</button>
                       </div>
                     ))}
                   </div>
