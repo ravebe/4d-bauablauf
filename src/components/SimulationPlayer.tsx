@@ -1,178 +1,132 @@
 import { useState } from "react";
 import type { Task } from "../types";
 
-interface Props {
-  tasks: Task[];
-  api: any;
-  aktivesModellId: string;
-}
+interface Props { tasks: Task[]; api: any; aktivesModellId: string; }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 export default function SimulationPlayer({ tasks, api, aktivesModellId }: Props) {
   const [laeuft, setLaeuft] = useState(false);
-  const [aktuellerTaskId, setAktuellerTaskId] = useState<string | null>(null);
-  const [taskDauer, setTaskDauer] = useState(3);
+  const [aktiverTaskId, setAktiverId] = useState<string | null>(null);
+  const [dauer, setDauer] = useState(3);
   const [fortschritt, setFortschritt] = useState(0);
 
-  const tasksMitBauteilen = tasks.filter(t => t.objektGuids.length > 0);
+  const mitBauteilen = tasks.filter(t => t.objektGuids.length > 0);
 
-  async function simulationStarten() {
+  async function start() {
     if (!api || !aktivesModellId) return;
-    setLaeuft(true);
-    setFortschritt(0);
+    setLaeuft(true); setFortschritt(0);
 
-    // Alle Neubau-Bauteile verstecken
     const neubauGuids = tasks.filter(t => t.typ === "neubau").flatMap(t => t.objektGuids);
     if (neubauGuids.length > 0) {
       try {
-        const ids = await api.viewer.convertToObjectRuntimeIds(aktivesModellId, neubauGuids);
-        await api.viewer.setObjectState({ visible: false }, ids);
+        const nums = neubauGuids.map(Number).filter(n => !isNaN(n) && n >= 0);
+        if (nums.length === neubauGuids.length) await api.viewer.setObjectState({ visible: false }, nums);
+        else {
+          const ids = await api.viewer.convertToObjectRuntimeIds(aktivesModellId, neubauGuids);
+          await api.viewer.setObjectState({ visible: false }, ids);
+        }
       } catch {}
     }
 
-    const zuSpielen = tasks.filter(t => t.objektGuids.length > 0);
+    for (let i = 0; i < tasks.length; i++) {
+      const task = tasks[i];
+      if (!task.objektGuids.length) continue;
+      setAktiverId(task.id);
+      setFortschritt(Math.round((i / tasks.length) * 100));
 
-    for (let i = 0; i < zuSpielen.length; i++) {
-      const task = zuSpielen[i];
-      setAktuellerTaskId(task.id);
-      setFortschritt(Math.round((i / zuSpielen.length) * 100));
-
-      let runtimeIds: number[] = [];
-      try {
-        runtimeIds = await api.viewer.convertToObjectRuntimeIds(aktivesModellId, task.objektGuids);
-      } catch { continue; }
+      let rIds: number[] = task.objektGuids.map(Number).filter(n => !isNaN(n) && n >= 0);
+      if (rIds.length !== task.objektGuids.length) {
+        try { rIds = await api.viewer.convertToObjectRuntimeIds(aktivesModellId, task.objektGuids); } catch { continue; }
+      }
 
       if (task.typ === "neubau") {
-        await api.viewer.setObjectState({ visible: true, color: task.manuellefarbe ?? "reset" }, runtimeIds);
-        await api.viewer.setSelection(runtimeIds);
-        await sleep(taskDauer * 1000);
-        await api.viewer.setSelection([]);
-      }
-
-      if (task.typ === "bestand") {
-        await sleep(taskDauer * 1000);
-      }
-
-      if (task.typ === "abbruch") {
-        await api.viewer.setObjectState({ color: { r: 255, g: 200, b: 0, a: 1 } }, runtimeIds);
+        try { await api.viewer.setObjectState({ visible: true, color: "reset" }, rIds); await api.viewer.setSelection(rIds); } catch {}
+        await sleep(dauer * 1000);
+        try { await api.viewer.setSelection([]); } catch {}
+      } else if (task.typ === "bestand") {
+        await sleep(dauer * 1000);
+      } else if (task.typ === "abbruch") {
+        try { await api.viewer.setObjectState({ color: { r: 255, g: 200, b: 0, a: 1 } }, rIds); } catch {}
         await sleep(2000);
-        await api.viewer.setObjectState({ visible: false, color: "reset" }, runtimeIds);
-        await api.viewer.setSelection([]);
-        const rest = taskDauer * 1000 - 2000;
+        try { await api.viewer.setObjectState({ visible: false, color: "reset" }, rIds); await api.viewer.setSelection([]); } catch {}
+        const rest = dauer * 1000 - 2000;
         if (rest > 0) await sleep(rest);
       }
     }
 
-    setFortschritt(100);
-    await api.viewer.setSelection([]);
-    setAktuellerTaskId(null);
-    setLaeuft(false);
+    setFortschritt(100); setAktiverId(null); setLaeuft(false);
+    try { await api.viewer.setSelection([]); } catch {}
   }
 
-  async function simulationStoppen() {
-    setLaeuft(false);
-    setAktuellerTaskId(null);
-    setFortschritt(0);
-    if (api) {
-      try { await api.viewer.setSelection([]); } catch {}
-    }
+  async function stopp() {
+    setLaeuft(false); setAktiverId(null); setFortschritt(0);
+    try { await api.viewer.setSelection([]); } catch {}
   }
 
-  if (!aktivesModellId) {
-    return (
-      <div className="panel">
-        <div className="alert" style={{ background: "#2a1f00", borderLeft: "3px solid #ffa726", color: "#ffa726" }}>
-          ⚠ Bitte zuerst unter "Modelle" ein IFC-Modell auswählen.
-        </div>
-      </div>
-    );
-  }
+  if (!aktivesModellId) return (
+    <div className="sim-wrap">
+      <div className="alert info">⚠ Kein Modell aktiv.</div>
+    </div>
+  );
 
   return (
-    <div className="panel">
-      <div className="section-header"><span>Simulation</span></div>
-
-      {/* Einstellungen */}
-      <div className="sub-section" style={{ marginBottom: 10 }}>
-        <div className="sub-label">Einstellungen</div>
-        <div className="einstellung">
+    <div className="sim-wrap">
+      <div className="sim-settings">
+        <div className="detail-block-title" style={{ marginBottom: 8 }}>Einstellungen</div>
+        <div className="sim-setting-row">
           <label>Sekunden pro Task</label>
-          <input
-            type="number" min={1} max={30} value={taskDauer}
-            onChange={(e) => setTaskDauer(Number(e.target.value))}
-            style={{ width: 60 }}
-          />
+          <input type="number" min={1} max={30} value={dauer} onChange={e => setDauer(Number(e.target.value))} />
         </div>
-        <p className="hinweis">
-          Abbruch: 2 Sek. gelb → ausgeblendet · Bestand: immer sichtbar
-        </p>
+        <div className="sim-hint">Abbruch: 2 Sek. gelb → ausgeblendet · Bestand: immer sichtbar</div>
       </div>
 
-      {/* Task-Liste */}
-      <div className="section-header">
-        <span>Tasks ({tasksMitBauteilen.length} mit Bauteilen)</span>
+      {laeuft && (
+        <div className="sim-progress">
+          <div className="sim-progress-bar"><div className="sim-progress-fill" style={{ width: `${fortschritt}%` }} /></div>
+          <div className="sim-progress-text">
+            {fortschritt}% · {aktiverTaskId ? tasks.find(t => t.id === aktiverTaskId)?.name : ""}
+          </div>
+        </div>
+      )}
+
+      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--tc-text-2)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 6 }}>
+        Tasks ({mitBauteilen.length} mit Bauteilen)
       </div>
 
-      {tasksMitBauteilen.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "20px", color: "#555" }}>
-          <p style={{ fontSize: 11 }}>Keine Tasks mit Bauteilen.<br />Weise zuerst Bauteile zu.</p>
+      {mitBauteilen.length === 0 ? (
+        <div style={{ fontSize: 12, color: "var(--tc-text-3)", textAlign: "center", padding: "16px 0" }}>
+          Noch keine Bauteile verknüpft.
         </div>
       ) : (
-        <div className="task-liste" style={{ marginBottom: 10 }}>
-          {tasks.map((task) => (
-            <div
-              key={task.id}
-              className={`sim-task-item ${aktuellerTaskId === task.id ? "aktiv" : ""}`}
-            >
-              <span className={`typ-dot ${task.typ}`}>●</span>
-              <span className="task-name">{task.name}</span>
-              <span className="task-datum">{task.objektGuids.length} Bauteile</span>
-              {aktuellerTaskId === task.id && (
-                <span style={{ fontSize: 10, color: "#4da6ff" }}>▶ läuft</span>
-              )}
+        <div className="sim-task-list">
+          {tasks.map(task => (
+            <div key={task.id} className={`sim-task-row ${aktiverTaskId === task.id ? "aktiv" : ""}`}>
+              <span className={`task-row-dot ${task.typ}`} />
+              <span className="sim-task-name">{task.name}</span>
+              <span className="sim-task-count">
+                {task.objektGuids.length > 0 ? `⬡ ${task.objektGuids.length}` : "∅"}
+              </span>
+              {aktiverTaskId === task.id && <span style={{ fontSize: 10, color: "var(--tc-blue)" }}>▶</span>}
             </div>
           ))}
         </div>
       )}
 
-      {/* Fortschritt */}
-      {laeuft && (
-        <div style={{ marginBottom: 10 }}>
-          <div style={{
-            height: 4, background: "#333", borderRadius: 2, overflow: "hidden"
-          }}>
-            <div style={{
-              height: "100%", width: `${fortschritt}%`,
-              background: "#4da6ff", transition: "width 0.3s"
-            }} />
-          </div>
-          <p style={{ fontSize: 10, color: "#666", marginTop: 4, textAlign: "center" }}>
-            {fortschritt}% abgeschlossen
-          </p>
-        </div>
-      )}
-
-      {/* Steuerung */}
-      <div className="steuerung">
+      <div className="sim-controls" style={{ marginTop: 10 }}>
         {!laeuft ? (
-          <button
-            className="btn-start"
-            onClick={simulationStarten}
-            disabled={tasksMitBauteilen.length === 0}
-          >
+          <button className="btn-start" onClick={start} disabled={mitBauteilen.length === 0}>
             ▶ Simulation starten
           </button>
         ) : (
-          <button className="btn-stop" onClick={simulationStoppen}>
-            ■ Simulation stoppen
-          </button>
+          <button className="btn-stop" onClick={stopp}>■ Stoppen</button>
         )}
+        <button className="btn-reset" onClick={stopp} disabled={!laeuft && fortschritt === 0}>↺</button>
       </div>
 
-      {aktuellerTaskId && (
-        <div className="aktiver-task-info">
-          ▶ Aktiv: {tasks.find(t => t.id === aktuellerTaskId)?.name}
+      {aktiverTaskId && (
+        <div className="sim-active-info">
+          ▶ Läuft: {tasks.find(t => t.id === aktiverTaskId)?.name}
         </div>
       )}
     </div>
