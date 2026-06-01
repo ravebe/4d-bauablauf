@@ -27,16 +27,18 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
   const [showValueDrop, setShowValueDrop] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Runtime IDs direkt für getObjectProperties nutzen
-  async function getProperties(runtimeIds: number[]) {
-    try {
-      const result = await api.viewer.getObjectProperties(aktivesModellId, runtimeIds);
-      if (Array.isArray(result) && result.length > 0) {
-        console.log("✅ Properties mit Runtime IDs:", result.length, "obj.id sample:", result[0]?.id);
-        return result;
-      }
-    } catch (e) { console.warn("getObjectProperties runtime:", e); }
-    return [];
+async function getProperties(runtimeIds: number[]) {
+    const BATCH = 20;
+    const alle: any[] = [];
+    for (let i = 0; i < runtimeIds.length; i += BATCH) {
+      const batch = runtimeIds.slice(i, i + BATCH);
+      try {
+        const result = await api.viewer.getObjectProperties(aktivesModellId, batch);
+        if (Array.isArray(result)) alle.push(...result);
+      } catch (e) { console.warn("batch", i, e); }
+    }
+    console.log("✅ Properties total:", alle.length, "sample id:", alle[0]?.id);
+    return alle;
   }
 
   async function markiereImViewer(guids: string[]) {
