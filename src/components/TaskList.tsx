@@ -31,37 +31,13 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
   const [showValueDrop, setShowValueDrop] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // KRITISCHER FIX: TC erwartet [{modelId, objectRuntimeIds: [...]}]
-  async function setSelectionTC(runtimeIds: number[]) {
-    if (!api || !aktivesModellId) return;
-    try {
-      await api.viewer.setSelection([{
-        modelId: aktivesModellId,
-        objectRuntimeIds: runtimeIds
-      }]);
-    } catch (e1) {
-      try {
-        await api.viewer.setSelection(runtimeIds);
-      } catch (e2) {
-        console.warn("setSelection fehlgeschlagen:", e2);
-      }
-    }
-  }
-
-  async function clearSelection() {
-    if (!api) return;
-    try {
-      await api.viewer.setSelection([]);
-    } catch {}
-  }
-
   async function getProps(runtimeIds: number[]): Promise<any[]> {
     const all: any[] = [];
     for (let i = 0; i < runtimeIds.length; i += BATCH) {
       try {
         const r = await api.viewer.getObjectProperties(aktivesModellId, runtimeIds.slice(i, i + BATCH));
         if (Array.isArray(r)) all.push(...r);
-      } catch {}
+      } catch (e) { console.warn("getProps batch:", e); }
     }
     return all;
   }
@@ -116,15 +92,24 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
     setTasks(tasks.map(t => t.id === id ? { ...t, typ } : t));
   }
 
+  // FIX: Nur plain Array übergeben, kein wrapped Object
+  async function markiereRuntimeIds(ids: number[]) {
+    if (!api || !ids.length) return;
+    try {
+      await api.viewer.setSelection(ids);
+      console.log("setSelection:", ids.length, "IDs");
+    } catch (e) { console.warn("setSelection:", e); }
+  }
+
   async function markiereGuids(guids: string[]) {
     if (!api || !aktivesModellId || !guids.length) return;
     try {
       const nums = guids.map(Number).filter(n => !isNaN(n) && n >= 0);
       if (nums.length === guids.length) {
-        await setSelectionTC(nums);
+        await markiereRuntimeIds(nums);
       } else {
         const ids = await api.viewer.convertToObjectRuntimeIds(aktivesModellId, guids);
-        await setSelectionTC(ids);
+        await markiereRuntimeIds(ids);
       }
     } catch (e) { console.warn("markiereGuids:", e); }
   }
@@ -138,9 +123,9 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
       if (!allAttrs.length) ladeAttr();
       const t = tasks.find(x => x.id === taskId);
       if (t?.objektGuids.length) markiereGuids(t.objektGuids);
-      else await clearSelection();
+      else await api?.viewer.setSelection([]).catch(() => {});
     } else {
-      await clearSelection();
+      await api?.viewer.setSelection([]).catch(() => {});
     }
   }
 
@@ -160,6 +145,7 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
         setMeldung({ text: "Keine Objekte gefunden.", typ: "err" });
         setLaden(false); return;
       }
+      console.log("Suche in", allIds.length, "Objekten | PSet:", selectedAttr.pset, "| Attr:", selectedAttr.name, "| Val:", attrValue);
 
       const props = await getProps(allIds);
       const treffer: number[] = [];
@@ -172,28 +158,30 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
         if (isNaN(rId)) continue;
         for (const g of (obj?.properties || [])) {
           const pset = g?.name || g?.displayName || "Eigenschaften";
-          if (pset !== suchPset) continue;
+          // PSet-Name Vergleich: exakt ODER enthält (robuster)
+          const psetMatch = pset === suchPset ||
+            pset.toLowerCase().includes(suchPset.toLowerCase()) ||
+            suchPset.toLowerCase().includes(pset.toLowerCase());
+          if (!psetMatch) continue;
           for (const p of (g?.properties || [])) {
-            if (p?.name === suchName) {
-              const val = String(p?.value ?? "").trim().toLowerCase();
-              if (val === suchVal || val.includes(suchVal)) {
-                treffer.push(rId);
-                break;
-              }
+            if (p?.name !== suchName) continue;
+            const val = String(p?.value ?? "").trim().toLowerCase();
+            if (val === suchVal || val.includes(suchVal)) {
+              treffer.push(rId);
+              break;
             }
           }
         }
       }
 
-      console.log(`Gefunden: ${treffer.length} von ${props.length} Objekten`);
+      console.log("Treffer:", treffer.length, "von", props.length);
 
       if (!treffer.length) {
-        setMeldung({ text: `Keine Bauteile mit ${suchName} = "${attrValue}" gefunden.`, typ: "err" });
+        setMeldung({ text: `Keine Bauteile mit "${selectedAttr.name} = ${attrValue}" gefunden.`, typ: "err" });
         setLaden(false); return;
       }
 
-      // NUR die gefundenen markieren
-      await setSelectionTC(treffer);
+      await markiereRuntimeIds(treffer);
 
       const guids = treffer.map(String);
       setTasks(tasks.map(t => t.id === taskId
@@ -227,7 +215,7 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
     <div className="tasklist-wrap" ref={panelRef}
       onClick={() => { setShowAttrDrop(false); setShowValueDrop(false); }}>
 
-      {/* ── GANTT SECTION ── */}
+      {/* GANTT SECTION */}
       <div className="gantt-section">
         <div className="gantt-section-header">
           Gantt · {tasks.length} Tasks
@@ -251,7 +239,7 @@ export default function TaskList({ tasks, setTasks, api, viewerState }: Props) {
         ))}
       </div>
 
-      {/* ── DETAIL SECTION ── */}
+      {/* DETAIL SECTION */}
       <div className="detail-section" onClick={e => e.stopPropagation()}>
         {!aktTask ? (
           <div className="detail-empty">↑ Task anklicken um Bauteile zuzuweisen</div>

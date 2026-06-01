@@ -14,6 +14,7 @@ interface SimProjekt {
   name: string;
   ersteltAm: string;
   tasks: Task[];
+  modellIds?: string[];
 }
 
 function ladeSims(): SimProjekt[] {
@@ -39,6 +40,8 @@ export default function App() {
   const [neueSimAktiv, setNeueSimAktiv] = useState(false);
   const [neueTasks, setNeueTasks] = useState<Task[]>([]);
   const [aktivTab, setAktivTab] = useState<"bauteile" | "simulation">("bauteile");
+  const [umbenennenId, setUmbenennenId] = useState<string | null>(null);
+  const [umbenennenText, setUmbenennenText] = useState("");
 
   function setSimulationen(sims: SimProjekt[]) {
     setSimulationenRaw(sims);
@@ -48,6 +51,20 @@ export default function App() {
   function setAktivId(id: string) {
     setAktivIdRaw(id);
     speichereAktivId(id);
+  }
+
+  function umbenennenStart(sim: SimProjekt, e: React.MouseEvent) {
+    e.stopPropagation();
+    setUmbenennenId(sim.id);
+    setUmbenennenText(sim.name);
+  }
+
+  function umbenennenSpeichern() {
+    if (!umbenennenId || !umbenennenText.trim()) { setUmbenennenId(null); return; }
+    setSimulationen(simulationen.map(s =>
+      s.id === umbenennenId ? { ...s, name: umbenennenText.trim() } : s
+    ));
+    setUmbenennenId(null);
   }
 
   function neueSimErstellen() {
@@ -65,12 +82,14 @@ export default function App() {
     };
     const neu = [...simulationen, sim];
     setSimulationen(neu);
-    setNeueTasks(tasks);
+    setAktivId(id);
+    setNeueTasks([]);
     setNeueSimAktiv(false);
     setExpandedId(id);
   }
 
-  function simLoeschen(id: string) {
+  function simLoeschen(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
     if (!confirm("Simulation löschen?")) return;
     const neu = simulationen.filter(s => s.id !== id);
     setSimulationen(neu);
@@ -78,7 +97,7 @@ export default function App() {
     if (expandedId === id) setExpandedId(null);
   }
 
-  function simImViewer(sim: SimProjekt) {
+  function simBearbeiten(sim: SimProjekt) {
     setAktivId(sim.id);
     speichereSims(simulationen);
     const url = `https://web.connect.trimble.com/projects/${projectId}/viewer/3d`;
@@ -92,20 +111,19 @@ export default function App() {
       const alt = aktuell.tasks.find(t => t.name.toLowerCase() === neu.name.toLowerCase());
       return alt ? { ...neu, typ: alt.typ, objektGuids: alt.objektGuids } : neu;
     });
-    const neu = simulationen.map(s => s.id === simId ? { ...s, tasks: merged } : s);
-    setSimulationen(neu);
+    setSimulationen(simulationen.map(s => s.id === simId ? { ...s, tasks: merged } : s));
   }
 
   const aktivSim = simulationen.find(s => s.id === aktivId) || simulationen[0];
 
-  // ── VIEWER ─────────────────────────────────────────────
+  // ── 3D VIEWER ─────────────────────────────────────────
   if (isViewerContext) {
     const tasks = aktivSim?.tasks || [];
-    const setTasks = (t: Task[]) => {
+
+    function setTasks(t: Task[]) {
       if (!aktivSim) return;
-      const neu = simulationen.map(s => s.id === aktivSim.id ? { ...s, tasks: t } : s);
-      setSimulationen(neu);
-    };
+      setSimulationen(simulationen.map(s => s.id === aktivSim.id ? { ...s, tasks: t } : s));
+    }
 
     return (
       <div className="app viewer-app">
@@ -142,7 +160,7 @@ export default function App() {
             <div className="tc-tab-content">
               {aktivTab === "bauteile" && (
                 <TaskList tasks={tasks} setTasks={setTasks} api={api}
-                  viewerState={{ ...viewerState, aktivesModellId: viewerState.aktivesModellId }} />
+                  viewerState={viewerState} />
               )}
               {aktivTab === "simulation" && (
                 <SimulationPlayer tasks={tasks} api={api}
@@ -158,6 +176,7 @@ export default function App() {
   // ── PROJEKTPANEL ────────────────────────────────────────
   return (
     <div className="app setup-app">
+      {/* Kein Toggle-Button im Projektpanel */}
       <div className="tc-header">
         <div className="tc-header-left">
           <div className="tc-logo">4D</div>
@@ -165,8 +184,6 @@ export default function App() {
         </div>
         <div className="tc-header-right">
           <span className={`tc-dot ${connected ? "on" : "off"}`} />
-          <button style={{ background: "rgba(255,255,255,.15)", border: "none", color: "white", padding: "2px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer", marginLeft: 4 }}
-            onClick={() => setIsViewerContext(true)}>🏗️</button>
         </div>
       </div>
 
@@ -174,12 +191,10 @@ export default function App() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
           <div className="tc-section-label" style={{ marginBottom: 0 }}>Simulationen</div>
           <button className="tc-btn-primary" style={{ padding: "6px 16px", fontSize: 12 }}
-            onClick={neueSimErstellen}>
-            + Neu
-          </button>
+            onClick={neueSimErstellen}>+ Neu</button>
         </div>
 
-        {/* Neue Simulation erstellen */}
+        {/* Neue Simulation */}
         {neueSimAktiv && (
           <div style={{ border: "1.5px solid var(--tc-blue)", borderRadius: 8, overflow: "hidden", marginBottom: 12, background: "var(--tc-white)" }}>
             <div style={{ padding: "10px 14px", background: "var(--tc-blue-light)", borderBottom: "1px solid var(--tc-blue-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -197,19 +212,17 @@ export default function App() {
               {neueTasks.length > 0 && (
                 <>
                   <GanttTabelle tasks={neueTasks} />
-                  <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-                    <button className="tc-btn-primary" style={{ flex: 1, padding: "9px 0", fontSize: 13 }}
-                      onClick={() => neueSimSpeichern(neueTasks)}>
-                      ✓ Simulation erstellen
-                    </button>
-                  </div>
+                  <button className="tc-btn-primary" style={{ width: "100%", marginTop: 10, padding: "9px 0", fontSize: 13 }}
+                    onClick={() => neueSimSpeichern(neueTasks)}>
+                    ✓ Simulation erstellen
+                  </button>
                 </>
               )}
             </div>
           </div>
         )}
 
-        {/* Liste bestehender Simulationen */}
+        {/* Keine Simulationen */}
         {simulationen.length === 0 && !neueSimAktiv && (
           <div className="tc-empty" style={{ padding: "32px 0" }}>
             <div className="tc-empty-icon">📊</div>
@@ -218,18 +231,40 @@ export default function App() {
           </div>
         )}
 
+        {/* Simulations-Liste */}
         {simulationen.map(sim => (
           <div key={sim.id} style={{
             border: `1px solid ${sim.id === aktivId ? "var(--tc-blue)" : "var(--tc-border)"}`,
             borderRadius: 8, overflow: "hidden", marginBottom: 8,
             background: "var(--tc-white)", boxShadow: "var(--tc-shadow)"
           }}>
-            {/* Sim Header */}
-            <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
-              onClick={() => setExpandedId(expandedId === sim.id ? null : sim.id)}>
+            {/* Header */}
+            <div
+              style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
+              onClick={() => setExpandedId(expandedId === sim.id ? null : sim.id)}
+            >
               <span style={{ fontSize: 22 }}>📊</span>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--tc-text)" }}>{sim.name}</div>
+                {/* Inline Umbenennen */}
+                {umbenennenId === sim.id ? (
+                  <input
+                    autoFocus
+                    value={umbenennenText}
+                    onChange={e => setUmbenennenText(e.target.value)}
+                    onBlur={umbenennenSpeichern}
+                    onKeyDown={e => { if (e.key === "Enter") umbenennenSpeichern(); if (e.key === "Escape") setUmbenennenId(null); }}
+                    onClick={e => e.stopPropagation()}
+                    style={{ fontSize: 13, fontWeight: 600, color: "var(--tc-text)", border: "1px solid var(--tc-blue)", borderRadius: 4, padding: "2px 6px", width: "100%", fontFamily: "inherit" }}
+                  />
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "var(--tc-text)" }}>{sim.name}</span>
+                    <button
+                      onClick={(e) => umbenennenStart(sim, e)}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--tc-text-3)", fontSize: 11, padding: "1px 4px" }}
+                      title="Umbenennen">✏️</button>
+                  </div>
+                )}
                 <div style={{ fontSize: 11, color: "var(--tc-text-3)" }}>
                   {sim.ersteltAm} · {sim.tasks.length} Tasks
                 </div>
@@ -242,16 +277,15 @@ export default function App() {
               </span>
             </div>
 
-            {/* Sim Detail */}
+            {/* Detail */}
             {expandedId === sim.id && (
               <div style={{ borderTop: "1px solid var(--tc-border)", padding: 14 }}>
                 <GanttTabelle tasks={sim.tasks} />
 
-                {/* Gantt aktualisieren */}
                 <div style={{ marginTop: 10, marginBottom: 10 }}>
                   <GanttImport
                     tasks={sim.tasks}
-                    setTasks={(t) => { const neu = simulationen.map(s => s.id === sim.id ? { ...s, tasks: t } : s); setSimulationen(neu); }}
+                    setTasks={(t) => setSimulationen(simulationen.map(s => s.id === sim.id ? { ...s, tasks: t } : s))}
                     ganttAktualisieren={(t) => ganttAktualisieren(sim.id, t)}
                     onNachImport={(t) => ganttAktualisieren(sim.id, t)}
                     kompakt={true}
@@ -260,11 +294,11 @@ export default function App() {
 
                 <div style={{ display: "flex", gap: 8 }}>
                   <button className="tc-btn-primary" style={{ flex: 1, padding: "9px 0", fontSize: 13 }}
-                    onClick={() => simImViewer(sim)}>
-                    🏗️ Im 3D Viewer öffnen
+                    onClick={() => simBearbeiten(sim)}>
+                    ✏️ Bearbeiten im 3D Viewer
                   </button>
                   <button className="tc-btn-danger" style={{ padding: "9px 12px" }}
-                    onClick={() => simLoeschen(sim.id)}>🗑</button>
+                    onClick={(e) => simLoeschen(sim.id, e)}>🗑</button>
                 </div>
               </div>
             )}
