@@ -16,7 +16,7 @@ function load() {
 function save(data: any) { try { localStorage.setItem(KEY, JSON.stringify(data)); } catch {} }
 
 export default function App() {
-  const { api, connected, isViewerContext, setIsViewerContext, accessToken, projectId, viewerState, setViewerState } = useApi();
+  const { api, connected, isViewerContext, setIsViewerContext, viewerState, setViewerState } = useApi();
   const saved = load();
 
   const [step, setStep] = useState<SetupStep>("home");
@@ -57,19 +57,19 @@ export default function App() {
     }
   }
 
-  // Header Komponente
-  const Header = ({ title = "4D Bauablauf", back, step: s }: { title?: string; back?: () => void; step?: string }) => (
+  const Header = ({ title = "4D Bauablauf", back, stepLabel }: { title?: string; back?: () => void; stepLabel?: string }) => (
     <div className="tc-header">
       <div className="tc-header-left">
-        {back && <button className="tc-back-btn" onClick={back}>←</button>}
-        {!back && <div className="tc-logo">4D</div>}
+        {back
+          ? <button className="tc-back-btn" onClick={back}>←</button>
+          : <div className="tc-logo">4D</div>
+        }
         <span className="tc-header-title">{title}</span>
       </div>
       <div className="tc-header-right">
-        {s && <span className="tc-step-pill">{s}</span>}
-        {hatProjekt && !s && <span className="tc-task-badge">{tasks.length} Tasks</span>}
+        {stepLabel && <span className="tc-step-pill">{stepLabel}</span>}
+        {!stepLabel && hatProjekt && <span className="tc-task-badge">{tasks.length} Tasks</span>}
         <span className={`tc-dot ${connected ? "on" : "off"}`} />
-        {/* Manueller Viewer-Toggle (Fallback) */}
         <button
           title={isViewerContext ? "Projektbereich" : "3D Viewer Modus"}
           style={{ background: "rgba(255,255,255,.15)", border: "none", color: "white", padding: "2px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer", marginLeft: 4 }}
@@ -90,7 +90,9 @@ export default function App() {
           <div className="tc-empty">
             <div className="tc-empty-icon">⚙️</div>
             <div className="tc-empty-title">Kein Projekt aktiv</div>
-            <div className="tc-empty-sub">Erstelle eine Simulation im Projektbereich unter <strong>4D Bauablauf</strong>.</div>
+            <div className="tc-empty-sub">
+              Erstelle eine Simulation im Projektbereich unter <strong>4D Bauablauf</strong>.
+            </div>
           </div>
         ) : (
           <>
@@ -118,19 +120,19 @@ export default function App() {
     );
   }
 
-  // ── PROJEKTPANEL – Setup Schritt: Modelle ───────────────
+  // ── PROJEKTPANEL – Schritt: Modelle ─────────────────────
   if (step === "modelle") {
     return (
       <div className="app setup-app">
-        <Header title="Neue Simulation" back={() => setStep("home")} step="Schritt 1 / 2" />
+        <Header title="Neue Simulation" back={() => setStep("home")} stepLabel="Schritt 1 / 2" />
         <div className="tc-setup-content">
-          <div className="tc-section-label">IFC-Modelle aus Ablage wählen</div>
+          <div className="tc-section-label">IFC-Modelle wählen</div>
           <p className="tc-section-desc">Wähle die Modelle für diese Simulation.</p>
-          {!accessToken
-            ? <div className="tc-info-banner">⟳ Verbinde mit Trimble Connect...</div>
-            : <FileBrowser accessToken={accessToken} projectId={projectId}
-                ausgewaehlteIds={neuModellIds} setAusgewaehlteIds={setNeuModellIds} />
-          }
+          <FileBrowser
+            api={api}
+            ausgewaehlteIds={neuModellIds}
+            setAusgewaehlteIds={setNeuModellIds}
+          />
           <div className="tc-actions">
             <button className="tc-btn-ghost" onClick={() => setStep("home")}>Abbrechen</button>
             <button className="tc-btn-primary" disabled={neuModellIds.length === 0}
@@ -143,11 +145,11 @@ export default function App() {
     );
   }
 
-  // ── PROJEKTPANEL – Setup Schritt: Gantt ─────────────────
+  // ── PROJEKTPANEL – Schritt: Gantt ───────────────────────
   if (step === "gantt") {
     return (
       <div className="app setup-app">
-        <Header title="Neue Simulation" back={() => setStep("modelle")} step="Schritt 2 / 2" />
+        <Header title="Neue Simulation" back={() => setStep("modelle")} stepLabel="Schritt 2 / 2" />
         <div className="tc-setup-content">
           <div className="tc-section-label">Gantt importieren</div>
           <p className="tc-section-desc">Excel (.xlsx) oder MS Project Export (.xml)</p>
@@ -170,12 +172,8 @@ export default function App() {
       <div className="tc-setup-content">
         <div className="tc-section-label">Simulationen</div>
 
-        {/* IMMER sichtbar: Neue Simulation Button */}
         {!hatProjekt && (
-          <button
-            className="tc-new-card"
-            onClick={() => { setNeuModellIds([]); setStep("modelle"); }}
-          >
+          <button className="tc-new-card" onClick={() => { setNeuModellIds([]); setStep("modelle"); }}>
             <div className="tc-new-circle">+</div>
             <div>
               <div className="tc-new-title">Neue Simulation erstellen</div>
@@ -198,10 +196,22 @@ export default function App() {
               </div>
 
               <div className="tc-pk-stats">
-                <div className="tc-stat"><div className="tc-stat-n">{tasks.length}</div><div className="tc-stat-l">Tasks</div></div>
-                <div className="tc-stat"><div className="tc-stat-n">{tasks.filter(t => t.objektGuids.length > 0).length}</div><div className="tc-stat-l">Verknüpft</div></div>
-                <div className="tc-stat"><div className="tc-stat-n">{tasks.reduce((s, t) => s + t.objektGuids.length, 0)}</div><div className="tc-stat-l">Bauteile</div></div>
-                <div className="tc-stat"><div className="tc-stat-n">{modellIds.length}</div><div className="tc-stat-l">Modelle</div></div>
+                <div className="tc-stat">
+                  <div className="tc-stat-n">{tasks.length}</div>
+                  <div className="tc-stat-l">Tasks</div>
+                </div>
+                <div className="tc-stat">
+                  <div className="tc-stat-n">{tasks.filter(t => t.objektGuids.length > 0).length}</div>
+                  <div className="tc-stat-l">Verknüpft</div>
+                </div>
+                <div className="tc-stat">
+                  <div className="tc-stat-n">{tasks.reduce((s, t) => s + t.objektGuids.length, 0)}</div>
+                  <div className="tc-stat-l">Bauteile</div>
+                </div>
+                <div className="tc-stat">
+                  <div className="tc-stat-n">{modellIds.length}</div>
+                  <div className="tc-stat-l">Modelle</div>
+                </div>
               </div>
 
               <div className="tc-pk-tasks">
@@ -216,7 +226,9 @@ export default function App() {
                     </span>
                   </div>
                 ))}
-                {tasks.length > 6 && <div className="tc-pk-more">+ {tasks.length - 6} weitere Tasks</div>}
+                {tasks.length > 6 && (
+                  <div className="tc-pk-more">+ {tasks.length - 6} weitere Tasks</div>
+                )}
               </div>
 
               <div className="tc-pk-footer">
@@ -232,7 +244,9 @@ export default function App() {
               <span className="tc-hint-icon">💡</span>
               <div>
                 <div className="tc-hint-title">Weiter im 3D Viewer</div>
-                <div className="tc-hint-desc">Öffne den 3D Viewer und aktiviere die Extension um Bauteile zu verknüpfen.</div>
+                <div className="tc-hint-desc">
+                  Öffne den 3D Viewer und aktiviere die Extension um Bauteile zu verknüpfen.
+                </div>
               </div>
             </div>
 

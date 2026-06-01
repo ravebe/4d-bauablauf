@@ -1,99 +1,130 @@
 import { useState, useEffect } from "react";
 
-interface TCFile { id: string; name: string; isFolder: boolean; fileType?: string; modifiedOn?: string; }
-interface Props { accessToken: string; projectId: string; ausgewaehlteIds: string[]; setAusgewaehlteIds: (ids: string[]) => void; }
-
-const TC = "https://app.connect.trimble.com/tc/api/2.0";
-const PROXY = "/api/tc";
-
-function pUrl(url: string, token: string) {
-  return `${PROXY}?url=${encodeURIComponent(url)}&token=${encodeURIComponent(token)}`;
+interface Modell {
+  id: string;
+  name: string;
+  fileName?: string;
 }
 
-export default function FileBrowser({ accessToken, projectId, ausgewaehlteIds, setAusgewaehlteIds }: Props) {
-  const [items, setItems] = useState<TCFile[]>([]);
-  const [pfad, setPfad] = useState<{ id: string; name: string }[]>([]);
-  const [laden, setLaden] = useState(false);
-  const [fehler, setFehler] = useState("");
+interface Props {
+  api: any;
+  ausgewaehlteIds: string[];
+  setAusgewaehlteIds: (ids: string[]) => void;
+}
 
-  async function lade(folderId?: string) {
-    if (!accessToken || !projectId) return;
-    setLaden(true); setFehler("");
+export default function FileBrowser({ api, ausgewaehlteIds, setAusgewaehlteIds }: Props) {
+  const [modelle, setModelle] = useState<Modell[]>([]);
+  const [laden, setLaden] = useState(false);
+  const [manuelleId, setManuelleId] = useState("");
+
+  async function ladeModelle() {
+    if (!api) return;
+    setLaden(true);
     try {
-      const url = folderId
-        ? `${TC}/projects/${projectId}/files?folderId=${folderId}`
-        : `${TC}/projects/${projectId}/files`;
-      const res = await fetch(pUrl(url, accessToken));
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const result: TCFile[] = [];
-      for (const f of (data.folders || [])) result.push({ id: f.id, name: f.name || f.displayName, isFolder: true });
-      for (const f of (data.files || [])) {
-        const name: string = f.name || f.displayName || "";
-        result.push({ id: f.id || f.versionId, name, isFolder: false, fileType: (f.fileType || name.split(".").pop() || "").toUpperCase(), modifiedOn: f.modifiedOn });
-      }
-      setItems(result);
-    } catch (e) { setFehler("Dateien konnten nicht geladen werden. " + String(e)); }
-    finally { setLaden(false); }
+      const res = await api.viewer.getModels();
+      const arr = Array.isArray(res) ? res : [];
+      const liste: Modell[] = arr.map((m: any) => ({
+        id: m.modelId || m.id || "",
+        name: m.name || m.fileName || "Modell",
+        fileName: m.fileName,
+      })).filter((m: Modell) => m.id);
+      setModelle(liste);
+    } catch (e) {
+      console.warn("getModels:", e);
+    } finally {
+      setLaden(false);
+    }
   }
 
-  useEffect(() => { if (accessToken && projectId) lade(); }, [accessToken, projectId]);
+  useEffect(() => { ladeModelle(); }, [api]);
 
-  function oeffne(id: string, name: string) { setPfad(p => [...p, { id, name }]); lade(id); }
-  function zurueck() { const neu = pfad.slice(0, -1); setPfad(neu); lade(neu.length > 0 ? neu[neu.length - 1].id : undefined); }
-  function toggle(id: string) { setAusgewaehlteIds(ausgewaehlteIds.includes(id) ? ausgewaehlteIds.filter(x => x !== id) : [...ausgewaehlteIds, id]); }
+  function toggle(id: string) {
+    setAusgewaehlteIds(
+      ausgewaehlteIds.includes(id)
+        ? ausgewaehlteIds.filter(x => x !== id)
+        : [...ausgewaehlteIds, id]
+    );
+  }
 
-  const ordner = items.filter(i => i.isFolder);
-  const ifc = items.filter(i => !i.isFolder && i.name.toLowerCase().endsWith(".ifc"));
-  const andere = items.filter(i => !i.isFolder && !i.name.toLowerCase().endsWith(".ifc"));
+  function manuelleHinzufuegen() {
+    const id = manuelleId.trim();
+    if (!id || ausgewaehlteIds.includes(id)) return;
+    setAusgewaehlteIds([...ausgewaehlteIds, id]);
+    setManuelleId("");
+  }
 
   return (
-    <div className="file-browser">
-      <div className="fb-crumbs">
-        <span className="fb-crumb" onClick={() => { setPfad([]); lade(); }}>📁 Ablage</span>
-        {pfad.map((p, i) => (
-          <span key={p.id}>
-            <span className="fb-sep"> / </span>
-            <span className="fb-crumb" onClick={() => { const neu = pfad.slice(0, i + 1); setPfad(neu); lade(p.id); }}>{p.name}</span>
-          </span>
-        ))}
-        {pfad.length > 0 && <button className="fb-back" onClick={zurueck}>← Zurück</button>}
+    <div>
+      <div className="tc-info-banner" style={{ marginBottom: 12 }}>
+        💡 Öffne zuerst den 3D Viewer und lade deine IFC-Modelle. Dann erscheinen sie hier automatisch.
       </div>
 
-      {laden && <div className="fb-loading">⟳ Lade...</div>}
-      {fehler && <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--tc-red)", background: "var(--tc-red-light)" }}>{fehler}</div>}
-      {!laden && !fehler && items.length === 0 && <div className="fb-empty">Keine Dateien.</div>}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <span style={{ fontSize: 11, color: "var(--tc-text-2)" }}>Im 3D Viewer geladene Modelle:</span>
+        <button className="tc-btn-ghost" style={{ padding: "3px 10px", fontSize: 11 }}
+          onClick={ladeModelle} disabled={laden}>
+          {laden ? "⟳" : "⟳ Aktualisieren"}
+        </button>
+      </div>
 
-      {ordner.map(o => (
-        <div key={o.id} className="fb-item fb-folder" onClick={() => oeffne(o.id, o.name)}>
-          <span className="fb-icon">📁</span>
-          <div className="fb-info"><div className="fb-name">{o.name}</div></div>
-          <span className="fb-arrow">›</span>
-        </div>
-      ))}
-
-      {ifc.map(f => (
-        <div key={f.id} className={`fb-item fb-ifc ${ausgewaehlteIds.includes(f.id) ? "selected" : ""}`} onClick={() => toggle(f.id)}>
-          <input type="checkbox" className="fb-checkbox" checked={ausgewaehlteIds.includes(f.id)} onChange={() => toggle(f.id)} onClick={e => e.stopPropagation()} />
-          <span className="fb-icon">🏗️</span>
-          <div className="fb-info">
-            <div className="fb-name">{f.name}</div>
-            {f.modifiedOn && <div className="fb-date">{new Date(f.modifiedOn).toLocaleDateString("de-CH")}</div>}
+      {modelle.length === 0 && !laden && (
+        <div style={{ textAlign: "center", padding: "16px 10px", border: "1px solid var(--tc-border)", borderRadius: 6, background: "var(--tc-white)", marginBottom: 10 }}>
+          <div style={{ fontSize: 24, marginBottom: 6 }}>🏗️</div>
+          <div style={{ fontSize: 12, color: "var(--tc-text-2)", fontWeight: 500 }}>Keine Modelle im Viewer</div>
+          <div style={{ fontSize: 11, color: "var(--tc-text-3)", marginTop: 3 }}>
+            Öffne den 3D Viewer → lade ein IFC-Modell → komm zurück
           </div>
-          <span className="fb-badge ifc">IFC</span>
         </div>
-      ))}
+      )}
 
-      {andere.slice(0, 4).map(f => (
-        <div key={f.id} className="fb-item fb-other">
-          <span className="fb-icon">📄</span>
-          <div className="fb-info"><div className="fb-name">{f.name}</div></div>
-          <span className="fb-badge">{f.fileType}</span>
+      <div style={{ marginBottom: 10 }}>
+        {modelle.map(m => (
+          <div
+            key={m.id}
+            className={`fb-item fb-ifc ${ausgewaehlteIds.includes(m.id) ? "selected" : ""}`}
+            onClick={() => toggle(m.id)}
+            style={{ marginBottom: 2 }}
+          >
+            <input
+              type="checkbox"
+              className="fb-checkbox"
+              checked={ausgewaehlteIds.includes(m.id)}
+              onChange={() => toggle(m.id)}
+              onClick={e => e.stopPropagation()}
+            />
+            <span className="fb-icon">🏗️</span>
+            <div className="fb-info">
+              <div className="fb-name">{m.name}</div>
+              <div className="fb-date" style={{ fontFamily: "monospace" }}>{m.id.slice(0, 20)}...</div>
+            </div>
+            <span className="fb-badge ifc">IFC</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ borderTop: "1px solid var(--tc-border)", paddingTop: 10, marginTop: 4 }}>
+        <div style={{ fontSize: 10, fontWeight: 600, color: "var(--tc-text-3)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 6 }}>
+          Modell-ID manuell eingeben
         </div>
-      ))}
+        <div style={{ display: "flex", gap: 6 }}>
+          <input
+            style={{ flex: 1, padding: "6px 8px", border: "1px solid #BDBDBD", borderRadius: 4, fontSize: 12, fontFamily: "monospace" }}
+            placeholder="Modell-ID oder Name..."
+            value={manuelleId}
+            onChange={e => setManuelleId(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && manuelleHinzufuegen()}
+          />
+          <button className="tc-btn-primary" style={{ padding: "6px 12px" }}
+            onClick={manuelleHinzufuegen} disabled={!manuelleId.trim()}>
+            + Hinzufügen
+          </button>
+        </div>
+      </div>
 
       {ausgewaehlteIds.length > 0 && (
-        <div className="fb-selected-info">✓ {ausgewaehlteIds.length} IFC-Datei(en) ausgewählt</div>
+        <div className="fb-selected-info" style={{ marginTop: 8, borderRadius: 4 }}>
+          ✓ {ausgewaehlteIds.length} Modell(e) gewählt
+        </div>
       )}
     </div>
   );
