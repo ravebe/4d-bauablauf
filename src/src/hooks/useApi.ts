@@ -44,13 +44,22 @@ export function useApi() {
   const [api, setApi] = useState<any>(null);
   const [connected, setConnected] = useState(false);
   const [isViewerContext, setIsViewerContext] = useState(false);
+  const [detecting, setDetecting] = useState(true);
   const [accessToken, setAccessToken] = useState("");
   const [projectId, setProjectId] = useState("");
   const [viewerState, setViewerState] = useState<ViewerState>({
     selektion: [], aktivesModellId: "", modelle: [],
   });
   const apiRef = useRef<any>(null);
-  const viewerEventRef = useRef(false);
+  const viewerBestaetigtRef = useRef(false);
+
+  // Nach 2 Sekunden: keine Viewer-Events = Projektpanel
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDetecting(false);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []);
 
   async function ladeModelle(instance: any): Promise<Modell[]> {
     try {
@@ -69,14 +78,16 @@ export function useApi() {
         const instance = await WorkspaceAPI.connect(
           window.parent,
           async (event: string, data: any) => {
-            console.log("TC:", event, JSON.stringify(data)?.slice(0, 100));
-
-            // Viewer-Events = definitiv im 3D Viewer
-            if (event.startsWith("viewer.on")) {
-              if (!viewerEventRef.current) {
-                viewerEventRef.current = true;
+            // Kamera- oder Selektions-Events kommen NUR im 3D Viewer
+            if (
+              event === "viewer.onCameraChanged" ||
+              event === "viewer.onSelectionChanged" ||
+              event === "viewer.onModelStateChanged"
+            ) {
+              if (!viewerBestaetigtRef.current) {
+                viewerBestaetigtRef.current = true;
                 setIsViewerContext(true);
-                console.log("✅ Viewer context via Event:", event);
+                setDetecting(false);
               }
             }
 
@@ -105,21 +116,13 @@ export function useApi() {
 
         apiRef.current = instance;
 
-        // setMenu: active=true → Viewer, active=false → Projektpanel
         try {
-          const menuResult = await instance.ui.setMenu({
+          await instance.ui.setMenu({
             title: "4D Bauablauf",
             icon: "https://project-fb9pr-red.vercel.app/icons.svg",
             command: "open",
-          }) as any;
-          console.log("setMenu result:", JSON.stringify(menuResult));
-          if (menuResult?.active === true) {
-            setIsViewerContext(true);
-            console.log("✅ Viewer context via setMenu active=true");
-          } else {
-            console.log("📋 Projektpanel context via setMenu active=false");
-          }
-        } catch (e) { console.warn("setMenu:", e); }
+          });
+        } catch {}
 
         try {
           const token = await instance.extension.requestPermission("accesstoken");
@@ -136,15 +139,16 @@ export function useApi() {
           } catch {}
         }
 
-        // Modelle laden (backup detection)
+        // Modelle prüfen (sofortige Bestätigung falls vorhanden)
         const modelle = await ladeModelle(instance);
         if (modelle.length > 0) {
+          viewerBestaetigtRef.current = true;
           setIsViewerContext(true);
+          setDetecting(false);
           setViewerState(prev => ({
             ...prev, modelle,
             aktivesModellId: modelle[0].id,
           }));
-          console.log("✅ Viewer context via Modelle:", modelle.length);
         }
 
         setApi(instance);
@@ -157,5 +161,8 @@ export function useApi() {
     connect();
   }, []);
 
-  return { api, connected, isViewerContext, setIsViewerContext, accessToken, projectId, viewerState, setViewerState };
+  return {
+    api, connected, isViewerContext, setIsViewerContext,
+    detecting, accessToken, projectId, viewerState, setViewerState
+  };
 }

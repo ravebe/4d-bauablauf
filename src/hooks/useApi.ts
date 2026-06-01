@@ -1,11 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
-export interface Modell {
-  id: string;
-  name: string;
-  fileId?: string;
-}
+export interface Modell { id: string; name: string; }
 
 export interface ViewerState {
   selektion: number[];
@@ -13,16 +9,25 @@ export interface ViewerState {
   modelle: Modell[];
 }
 
-function parseIds(data: any): number[] {
+export function parseObjectIds(rohe: any): number[] {
+  if (!Array.isArray(rohe)) return [];
+  const ids: number[] = [];
+  for (const item of rohe) {
+    if (Array.isArray(item?.objects)) {
+      for (const o of item.objects) { const n = Number(o?.id ?? o); if (!isNaN(n)) ids.push(n); }
+    } else if (typeof item === "number") { ids.push(item); }
+    else if (item?.id != null) { const n = Number(item.id); if (!isNaN(n)) ids.push(n); }
+  }
+  return ids;
+}
+
+function parseSelIds(data: any): number[] {
   if (!data) return [];
   const outer = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
   const ids: number[] = [];
   for (const item of outer) {
     if (Array.isArray(item?.objectRuntimeIds)) {
-      for (const id of item.objectRuntimeIds) {
-        const n = Number(id);
-        if (!isNaN(n) && n >= 0) ids.push(n);
-      }
+      for (const id of item.objectRuntimeIds) { const n = Number(id); if (!isNaN(n) && n >= 0) ids.push(n); }
       continue;
     }
     if (typeof item === "number") { ids.push(item); continue; }
@@ -35,37 +40,23 @@ function parseIds(data: any): number[] {
   return ids;
 }
 
-export function parseObjectIds(rohe: any): number[] {
-  if (!Array.isArray(rohe)) return [];
-  const ids: number[] = [];
-  for (const item of rohe) {
-    if (Array.isArray(item?.objects)) {
-      for (const o of item.objects) {
-        const n = Number(o?.id ?? o);
-        if (!isNaN(n)) ids.push(n);
-      }
-    } else if (typeof item === "number") {
-      ids.push(item);
-    } else if (item?.id != null) {
-      const n = Number(item.id);
-      if (!isNaN(n)) ids.push(n);
-    }
-  }
-  return ids;
-}
-
 export function useApi() {
   const [api, setApi] = useState<any>(null);
   const [connected, setConnected] = useState(false);
   const [isViewerContext, setIsViewerContext] = useState(false);
-  const [accessToken, setAccessToken] = useState<string>("");
-  const [projectId, setProjectId] = useState<string>("");
+  const [detecting, setDetecting] = useState(true);
+  const [accessToken, setAccessToken] = useState("");
+  const [projectId, setProjectId] = useState("");
   const [viewerState, setViewerState] = useState<ViewerState>({
-    selektion: [],
-    aktivesModellId: "",
-    modelle: [],
+    selektion: [], aktivesModellId: "", modelle: [],
   });
   const apiRef = useRef<any>(null);
+  const viewerBestaetigtRef = useRef(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDetecting(false), 2000);
+    return () => clearTimeout(timer);
+  }, []);
 
   async function ladeModelle(instance: any): Promise<Modell[]> {
     try {
@@ -74,7 +65,6 @@ export function useApi() {
       return arr.map((m: any) => ({
         id: m.modelId || m.id || "",
         name: m.name || m.fileName || "Modell",
-        fileId: m.fileId || m.file?.id,
       })).filter((m: Modell) => m.id);
     } catch { return []; }
   }
@@ -85,18 +75,26 @@ export function useApi() {
         const instance = await WorkspaceAPI.connect(
           window.parent,
           async (event: string, data: any) => {
-            console.log("TC:", event, JSON.stringify(data)?.slice(0, 150));
+            if (
+              event === "viewer.onCameraChanged" ||
+              event === "viewer.onSelectionChanged" ||
+              event === "viewer.onModelStateChanged"
+            ) {
+              if (!viewerBestaetigtRef.current) {
+                viewerBestaetigtRef.current = true;
+                setIsViewerContext(true);
+                setDetecting(false);
+              }
+            }
 
             if (event === "viewer.onSelectionChanged") {
-              const ids = parseIds(data);
+              const ids = parseSelIds(data);
               setViewerState(prev => ({ ...prev, selektion: ids }));
             }
 
             if (event === "extension.accessToken") {
               const token = (data as any)?.data || data;
-              if (typeof token === "string" && token.length > 10) {
-                setAccessToken(token);
-              }
+              if (typeof token === "string" && token.length > 10) setAccessToken(token);
             }
 
             if (["viewer.onModelLoaded", "viewer.onModelsLoaded", "viewer.onModelAdded"].includes(event)) {
@@ -105,7 +103,7 @@ export function useApi() {
                 ...prev, modelle,
                 aktivesModellId: modelle.length > 0
                   ? (modelle.find(m => m.id === prev.aktivesModellId) ? prev.aktivesModellId : modelle[0].id)
-                  : "",
+                  : prev.aktivesModellId,
               }));
             }
           },
@@ -120,36 +118,32 @@ export function useApi() {
             icon: "https://project-fb9pr-red.vercel.app/icons.svg",
             command: "open",
           });
-        } catch (e) { console.warn("setMenu:", e); }
+        } catch {}
 
         try {
           const token = await instance.extension.requestPermission("accesstoken");
-          if (typeof token === "string" && token.length > 10) {
-            setAccessToken(token);
-          }
-        } catch (e) { console.warn("accessToken:", e); }
+          if (typeof token === "string" && token.length > 10) setAccessToken(token);
+        } catch {}
 
         try {
           const proj = await instance.project.getProject() as any;
-          const pid: string = proj?.id || proj?.projectId || proj?.projectid || proj?.project_id || "";
-          setProjectId(pid);
-          console.log("Project ID:", pid);
+          setProjectId(proj?.id || proj?.projectId || "");
         } catch {
           try {
             const proj = await (instance.project as any).getCurrentProject() as any;
-            setProjectId(proj?.id || proj?.projectId || "");
+            setProjectId(proj?.id || "");
           } catch {}
         }
 
-        try {
-          const modelle = await ladeModelle(instance);
+        const modelle = await ladeModelle(instance);
+        if (modelle.length > 0) {
+          viewerBestaetigtRef.current = true;
           setIsViewerContext(true);
+          setDetecting(false);
           setViewerState(prev => ({
             ...prev, modelle,
-            aktivesModellId: modelle.length > 0 ? modelle[0].id : "",
+            aktivesModellId: modelle[0].id,
           }));
-        } catch {
-          setIsViewerContext(false);
         }
 
         setApi(instance);
@@ -162,5 +156,8 @@ export function useApi() {
     connect();
   }, []);
 
-  return { api, connected, isViewerContext, setIsViewerContext, accessToken, projectId, viewerState, setViewerState };
+  return {
+    api, connected, isViewerContext, setIsViewerContext,
+    detecting, accessToken, projectId, viewerState, setViewerState
+  };
 }

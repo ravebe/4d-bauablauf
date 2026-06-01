@@ -34,7 +34,8 @@ function ladeAktivId(): string { return localStorage.getItem(AKTIV_KEY) || ""; }
 function speichereAktivId(id: string) { localStorage.setItem(AKTIV_KEY, id); }
 
 export default function App() {
-  const { api, connected, isViewerContext, accessToken, projectId, viewerState } = useApi();
+  const { api, connected, isViewerContext, setIsViewerContext, detecting, accessToken, projectId, viewerState } = useApi();
+
   const [simulationen, setSimulationenRaw] = useState<SimProjekt[]>(ladeSims);
   const [aktivId, setAktivIdRaw] = useState<string>(ladeAktivId);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -94,9 +95,7 @@ export default function App() {
   function simBearbeiten(sim: SimProjekt) {
     setAktivId(sim.id);
     speichereSims(simulationen);
-    localStorage.setItem("4d-viewer-mode", "true");
-    // Erstes Modell in URL mitgeben → TC lädt es automatisch
-    const modelParam = sim.modelle.length > 0
+    const modelParam = sim.modelle?.length > 0
       ? `?modelId=${encodeURIComponent(sim.modelle[0].versionId || sim.modelle[0].fileId)}`
       : "";
     const url = `https://web.connect.trimble.com/projects/${projectId}/viewer/3d${modelParam}`;
@@ -115,6 +114,18 @@ export default function App() {
 
   const aktivSim = simulationen.find(s => s.id === aktivId) || simulationen[0];
 
+  // Ladescreen während Context-Erkennung
+  if (detecting) {
+    return (
+      <div className="app" style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--tc-bg)" }}>
+        <div style={{ textAlign: "center", color: "var(--tc-text-3)" }}>
+          <div style={{ fontSize: 28, marginBottom: 8, animation: "spin 1s linear infinite" }}>⟳</div>
+          <div style={{ fontSize: 12 }}>Verbinde...</div>
+        </div>
+      </div>
+    );
+  }
+
   // ════════════════════════════════════════════════════════
   // 3D VIEWER
   // ════════════════════════════════════════════════════════
@@ -122,12 +133,12 @@ export default function App() {
     const tasks = aktivSim?.tasks || [];
     const modelle = aktivSim?.modelle || [];
 
-    function setTasks(t: Task[]) {
+    const setTasks = (t: Task[]) => {
       if (!aktivSim) return;
       const neu = simulationen.map(s => s.id === aktivSim.id ? { ...s, tasks: t } : s);
       setSimulationenRaw(neu);
       speichereSims(neu);
-    }
+    };
 
     return (
       <div className="app viewer-app">
@@ -144,10 +155,9 @@ export default function App() {
           </div>
         </div>
 
-        {/* Modell-Banner falls Modelle verknüpft */}
         {modelle.length > 0 && viewerState.modelle.length === 0 && (
           <div style={{ padding: "6px 12px", background: "#FFF4CE", borderBottom: "1px solid #FFD700", fontSize: 11, color: "#6B3A00" }}>
-            ⚠ Verknüpfte Modelle: {modelle.map(m => m.name).join(", ")} – bitte im Viewer laden
+            ⚠ Verknüpfte Modelle: {modelle.map(m => m.name).join(", ")}
           </div>
         )}
 
@@ -158,6 +168,12 @@ export default function App() {
             <div className="tc-empty-sub">
               Erstelle eine Simulation im Projektbereich<br />und klicke "Bearbeiten im 3D Viewer".
             </div>
+            <button
+              className="tc-btn-primary"
+              style={{ marginTop: 16, padding: "8px 20px" }}
+              onClick={() => setIsViewerContext(false)}>
+              → Zum Projektbereich
+            </button>
           </div>
         ) : (
           <>
@@ -207,7 +223,6 @@ export default function App() {
           </button>
         </div>
 
-        {/* Neue Simulation */}
         {neueSimAktiv && (
           <div style={{ border: "1.5px solid var(--tc-blue)", borderRadius: 8, overflow: "hidden", marginBottom: 12, background: "var(--tc-white)" }}>
             <div style={{ padding: "10px 14px", background: "var(--tc-blue-light)", borderBottom: "1px solid var(--tc-blue-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -231,7 +246,8 @@ export default function App() {
                     accessToken={accessToken}
                     projectId={projectId}
                   />
-                  <button className="tc-btn-primary" style={{ width: "100%", marginTop: 10, padding: "9px 0", fontSize: 13 }}
+                  <button className="tc-btn-primary"
+                    style={{ width: "100%", marginTop: 10, padding: "9px 0", fontSize: 13 }}
                     onClick={neueSimSpeichern}>
                     ✓ Simulation erstellen
                   </button>
@@ -249,7 +265,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Simulations-Liste */}
         {simulationen.map(sim => (
           <div key={sim.id} style={{
             border: `1px solid ${sim.id === aktivId ? "var(--tc-blue)" : "var(--tc-border)"}`,
@@ -288,14 +303,12 @@ export default function App() {
             {expandedId === sim.id && (
               <div style={{ borderTop: "1px solid var(--tc-border)", padding: 14 }}>
                 <GanttTabelle tasks={sim.tasks} />
-
                 <ModellVerwaltung
                   modelle={sim.modelle || []}
                   setModelle={m => updateSim(sim.id, { modelle: m })}
                   accessToken={accessToken}
                   projectId={projectId}
                 />
-
                 <div style={{ marginTop: 8, marginBottom: 10 }}>
                   <GanttImport
                     tasks={sim.tasks}
@@ -305,13 +318,14 @@ export default function App() {
                     kompakt={true}
                   />
                 </div>
-
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button className="tc-btn-primary" style={{ flex: 1, padding: "9px 0", fontSize: 13 }}
+                  <button className="tc-btn-primary"
+                    style={{ flex: 1, padding: "9px 0", fontSize: 13 }}
                     onClick={() => simBearbeiten(sim)}>
                     ✏️ Bearbeiten im 3D Viewer
                   </button>
-                  <button className="tc-btn-danger" style={{ padding: "9px 12px" }}
+                  <button className="tc-btn-danger"
+                    style={{ padding: "9px 12px" }}
                     onClick={e => simLoeschen(sim.id, e)}>🗑</button>
                 </div>
               </div>
