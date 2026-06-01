@@ -21,7 +21,7 @@ export function parseObjectIds(rohe: any): number[] {
   return ids;
 }
 
-function parseSelectionIds(data: any): number[] {
+function parseSelIds(data: any): number[] {
   if (!data) return [];
   const outer = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
   const ids: number[] = [];
@@ -40,17 +40,11 @@ function parseSelectionIds(data: any): number[] {
   return ids;
 }
 
-// Kontext erkennen: 3D Viewer oder Projektpanel
-function detectViewerContext(): boolean {
-  if (typeof document === "undefined") return false;
-  const ref = document.referrer || "";
-  return ref.includes("/viewer/3d") || ref.includes("viewer/3d");
-}
-
 export function useApi() {
   const [api, setApi] = useState<any>(null);
   const [connected, setConnected] = useState(false);
-  const [isViewerContext] = useState(detectViewerContext);
+  // Startet immer als FALSE – wird nur true wenn Viewer-Events kommen
+  const [isViewerContext, setIsViewerContext] = useState(false);
   const [accessToken, setAccessToken] = useState("");
   const [projectId, setProjectId] = useState("");
   const [viewerState, setViewerState] = useState<ViewerState>({
@@ -77,10 +71,19 @@ export function useApi() {
           async (event: string, data: any) => {
             console.log("TC:", event, JSON.stringify(data)?.slice(0, 100));
 
+            // Viewer-Events → wir sind im 3D Viewer
             if (event === "viewer.onSelectionChanged") {
-              const ids = parseSelectionIds(data);
-              console.log("Selektion:", ids);
+              setIsViewerContext(true);
+              const ids = parseSelIds(data);
               setViewerState(prev => ({ ...prev, selektion: ids }));
+            }
+
+            if (event === "viewer.onModelStateChanged" ||
+                event === "viewer.onModelLoaded" ||
+                event === "viewer.onModelsLoaded" ||
+                event === "viewer.onModelAdded" ||
+                event === "viewer.onCameraChanged") {
+              setIsViewerContext(true);
             }
 
             if (event === "extension.accessToken") {
@@ -94,7 +97,7 @@ export function useApi() {
                 ...prev, modelle,
                 aktivesModellId: modelle.length > 0
                   ? (modelle.find(m => m.id === prev.aktivesModellId) ? prev.aktivesModellId : modelle[0].id)
-                  : "",
+                  : prev.aktivesModellId,
               }));
             }
           },
@@ -126,11 +129,15 @@ export function useApi() {
           } catch {}
         }
 
+        // Modelle laden – wenn vorhanden → Viewer Context
         const modelle = await ladeModelle(instance);
-        setViewerState(prev => ({
-          ...prev, modelle,
-          aktivesModellId: modelle.length > 0 ? modelle[0].id : "",
-        }));
+        if (modelle.length > 0) {
+          setIsViewerContext(true);
+          setViewerState(prev => ({
+            ...prev, modelle,
+            aktivesModellId: modelle.length > 0 ? modelle[0].id : "",
+          }));
+        }
 
         setApi(instance);
         setConnected(true);
@@ -142,5 +149,5 @@ export function useApi() {
     connect();
   }, []);
 
-  return { api, connected, isViewerContext, accessToken, projectId, viewerState, setViewerState };
+  return { api, connected, isViewerContext, setIsViewerContext, accessToken, projectId, viewerState, setViewerState };
 }

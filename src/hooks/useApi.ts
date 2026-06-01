@@ -162,5 +162,5 @@ export function useApi() {
     connect();
   }, []);
 
-  return { api, connected, isViewerContext, accessToken, projectId, viewerState, setViewerState };
+  return { api, connected, isViewerContext, setIsViewerContext, accessToken, projectId, viewerState, setViewerState };
 }

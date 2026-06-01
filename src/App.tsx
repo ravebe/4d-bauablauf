@@ -7,7 +7,6 @@ import TaskList from "./components/TaskList";
 import SimulationPlayer from "./components/SimulationPlayer";
 
 type SetupStep = "home" | "modelle" | "gantt";
-
 const KEY = "4d-v6";
 
 function load() {
@@ -17,7 +16,7 @@ function load() {
 function save(data: any) { try { localStorage.setItem(KEY, JSON.stringify(data)); } catch {} }
 
 export default function App() {
-  const { api, connected, isViewerContext, accessToken, projectId, viewerState, setViewerState } = useApi();
+  const { api, connected, isViewerContext, setIsViewerContext, accessToken, projectId, viewerState, setViewerState } = useApi();
   const saved = load();
 
   const [step, setStep] = useState<SetupStep>("home");
@@ -27,11 +26,11 @@ export default function App() {
   const [aktivTab, setAktivTab] = useState<"bauteile" | "simulation">("bauteile");
 
   const hatProjekt = tasks.length > 0;
-  const ersteltAm = saved?.ersteltAm || new Date().toLocaleDateString("de-CH");
+  const ersteltAm = saved?.ersteltAm || "";
 
   function setTasks(t: Task[]) {
     setTasksRaw(t);
-    save({ tasks: t, modellIds, ersteltAm });
+    save({ tasks: t, modellIds, ersteltAm: ersteltAm || new Date().toLocaleDateString("de-CH") });
   }
 
   function ganttAktualisieren(neueTasks: Task[]) {
@@ -43,8 +42,8 @@ export default function App() {
   }
 
   function simulationErstellen() {
-    const data = { tasks, modellIds: neuModellIds, ersteltAm: new Date().toLocaleDateString("de-CH") };
-    save(data);
+    const am = new Date().toLocaleDateString("de-CH");
+    save({ tasks, modellIds: neuModellIds, ersteltAm: am });
     setModellIds(neuModellIds);
     setViewerState(prev => ({ ...prev, aktivesModellId: neuModellIds[0] || prev.aktivesModellId }));
     setStep("home");
@@ -58,21 +57,35 @@ export default function App() {
     }
   }
 
-  // ── VIEWER ──────────────────────────────────────────────
+  // Header Komponente
+  const Header = ({ title = "4D Bauablauf", back, step: s }: { title?: string; back?: () => void; step?: string }) => (
+    <div className="tc-header">
+      <div className="tc-header-left">
+        {back && <button className="tc-back-btn" onClick={back}>←</button>}
+        {!back && <div className="tc-logo">4D</div>}
+        <span className="tc-header-title">{title}</span>
+      </div>
+      <div className="tc-header-right">
+        {s && <span className="tc-step-pill">{s}</span>}
+        {hatProjekt && !s && <span className="tc-task-badge">{tasks.length} Tasks</span>}
+        <span className={`tc-dot ${connected ? "on" : "off"}`} />
+        {/* Manueller Viewer-Toggle (Fallback) */}
+        <button
+          title={isViewerContext ? "Projektbereich" : "3D Viewer Modus"}
+          style={{ background: "rgba(255,255,255,.15)", border: "none", color: "white", padding: "2px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer", marginLeft: 4 }}
+          onClick={() => setIsViewerContext(!isViewerContext)}
+        >
+          {isViewerContext ? "📋" : "🏗️"}
+        </button>
+      </div>
+    </div>
+  );
+
+  // ── 3D VIEWER ───────────────────────────────────────────
   if (isViewerContext) {
     return (
       <div className="app viewer-app">
-        <div className="tc-header">
-          <div className="tc-header-left">
-            <div className="tc-logo">4D</div>
-            <span className="tc-header-title">4D Bauablauf</span>
-          </div>
-          <div className="tc-header-right">
-            {hatProjekt && <span className="tc-task-badge">{tasks.length} Tasks</span>}
-            <span className={`tc-dot ${connected ? "on" : "off"}`} />
-          </div>
-        </div>
-
+        <Header />
         {!hatProjekt ? (
           <div className="tc-empty">
             <div className="tc-empty-icon">⚙️</div>
@@ -91,10 +104,8 @@ export default function App() {
             </div>
             <div className="tc-tab-content">
               {aktivTab === "bauteile" && (
-                <TaskList
-                  tasks={tasks} setTasks={setTasks} api={api}
-                  viewerState={{ ...viewerState, aktivesModellId: modellIds[0] || viewerState.aktivesModellId }}
-                />
+                <TaskList tasks={tasks} setTasks={setTasks} api={api}
+                  viewerState={{ ...viewerState, aktivesModellId: modellIds[0] || viewerState.aktivesModellId }} />
               )}
               {aktivTab === "simulation" && (
                 <SimulationPlayer tasks={tasks} api={api}
@@ -107,16 +118,11 @@ export default function App() {
     );
   }
 
-  // ── PROJEKTPANEL ─────────────────────────────────────────
-
+  // ── PROJEKTPANEL – Setup Schritt: Modelle ───────────────
   if (step === "modelle") {
     return (
       <div className="app setup-app">
-        <div className="tc-header">
-          <button className="tc-back-btn" onClick={() => setStep("home")}>←</button>
-          <span className="tc-header-title">Neue Simulation</span>
-          <span className="tc-step-pill">Schritt 1 / 2</span>
-        </div>
+        <Header title="Neue Simulation" back={() => setStep("home")} step="Schritt 1 / 2" />
         <div className="tc-setup-content">
           <div className="tc-section-label">IFC-Modelle aus Ablage wählen</div>
           <p className="tc-section-desc">Wähle die Modelle für diese Simulation.</p>
@@ -137,14 +143,11 @@ export default function App() {
     );
   }
 
+  // ── PROJEKTPANEL – Setup Schritt: Gantt ─────────────────
   if (step === "gantt") {
     return (
       <div className="app setup-app">
-        <div className="tc-header">
-          <button className="tc-back-btn" onClick={() => setStep("modelle")}>←</button>
-          <span className="tc-header-title">Neue Simulation</span>
-          <span className="tc-step-pill">Schritt 2 / 2</span>
-        </div>
+        <Header title="Neue Simulation" back={() => setStep("modelle")} step="Schritt 2 / 2" />
         <div className="tc-setup-content">
           <div className="tc-section-label">Gantt importieren</div>
           <p className="tc-section-desc">Excel (.xlsx) oder MS Project Export (.xml)</p>
@@ -160,22 +163,19 @@ export default function App() {
     );
   }
 
-  // HOME
+  // ── PROJEKTPANEL – Home ──────────────────────────────────
   return (
     <div className="app setup-app">
-      <div className="tc-header">
-        <div className="tc-header-left">
-          <div className="tc-logo">4D</div>
-          <span className="tc-header-title">4D Bauablauf</span>
-        </div>
-        <span className={`tc-dot ${connected ? "on" : "off"}`} />
-      </div>
-
+      <Header />
       <div className="tc-setup-content">
         <div className="tc-section-label">Simulationen</div>
 
+        {/* IMMER sichtbar: Neue Simulation Button */}
         {!hatProjekt && (
-          <button className="tc-new-card" onClick={() => { setNeuModellIds([]); setStep("modelle"); }}>
+          <button
+            className="tc-new-card"
+            onClick={() => { setNeuModellIds([]); setStep("modelle"); }}
+          >
             <div className="tc-new-circle">+</div>
             <div>
               <div className="tc-new-title">Neue Simulation erstellen</div>
@@ -191,7 +191,9 @@ export default function App() {
                 <span className="tc-pk-icon">📊</span>
                 <div className="tc-pk-info">
                   <div className="tc-pk-name">4D Bauablaufsimulation</div>
-                  <div className="tc-pk-meta">Erstellt {ersteltAm} · {modellIds.length} Modell(e)</div>
+                  <div className="tc-pk-meta">
+                    {ersteltAm && `Erstellt ${ersteltAm} · `}{modellIds.length} Modell(e)
+                  </div>
                 </div>
               </div>
 
@@ -214,13 +216,12 @@ export default function App() {
                     </span>
                   </div>
                 ))}
-                {tasks.length > 6 && (
-                  <div className="tc-pk-more">+ {tasks.length - 6} weitere Tasks</div>
-                )}
+                {tasks.length > 6 && <div className="tc-pk-more">+ {tasks.length - 6} weitere Tasks</div>}
               </div>
 
               <div className="tc-pk-footer">
-                <button className="tc-btn-secondary" onClick={() => { setNeuModellIds(modellIds); setStep("gantt"); }}>
+                <button className="tc-btn-secondary"
+                  onClick={() => { setNeuModellIds(modellIds); setStep("gantt"); }}>
                   ↻ Gantt aktualisieren
                 </button>
                 <button className="tc-btn-danger" onClick={simulationLoeschen}>🗑</button>
