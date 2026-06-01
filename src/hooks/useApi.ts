@@ -57,6 +57,9 @@ export function parseObjectIds(rohe: any): number[] {
 export function useApi() {
   const [api, setApi] = useState<any>(null);
   const [connected, setConnected] = useState(false);
+  const [isViewerContext, setIsViewerContext] = useState(false);
+  const [accessToken, setAccessToken] = useState<string>("");
+  const [projectId, setProjectId] = useState<string>("");
   const [viewerState, setViewerState] = useState<ViewerState>({
     selektion: [],
     aktivesModellId: "",
@@ -67,14 +70,13 @@ export function useApi() {
   async function ladeModelle(instance: any): Promise<Modell[]> {
     try {
       const res = await instance.viewer.getModels();
-      console.log("getModels:", JSON.stringify(res)?.slice(0, 300));
       const arr = Array.isArray(res) ? res : [];
       return arr.map((m: any) => ({
         id: m.modelId || m.id || "",
-        name: m.name || m.fileName || m.modelName || "Modell",
+        name: m.name || m.fileName || "Modell",
         fileId: m.fileId || m.file?.id,
       })).filter((m: Modell) => m.id);
-    } catch (e) { console.warn("ladeModelle:", e); return []; }
+    } catch (e) { return []; }
   }
 
   useEffect(() => {
@@ -83,23 +85,26 @@ export function useApi() {
         const instance = await WorkspaceAPI.connect(
           window.parent,
           async (event: string, data: any) => {
-            console.log("TC:", event, JSON.stringify(data)?.slice(0, 200));
+            console.log("TC:", event, JSON.stringify(data)?.slice(0, 150));
 
             if (event === "viewer.onSelectionChanged") {
               const ids = parseIds(data);
-              console.log("✅ Selektion IDs:", ids);
               setViewerState(prev => ({ ...prev, selektion: ids }));
+            }
+
+            if (event === "extension.accessToken") {
+              const token = data?.data || data;
+              if (typeof token === "string" && token.length > 10) {
+                setAccessToken(token);
+              }
             }
 
             if (["viewer.onModelLoaded", "viewer.onModelsLoaded", "viewer.onModelAdded"].includes(event)) {
               const modelle = await ladeModelle(apiRef.current);
               setViewerState(prev => ({
-                ...prev,
-                modelle,
+                ...prev, modelle,
                 aktivesModellId: modelle.length > 0
-                  ? (modelle.find(m => m.id === prev.aktivesModellId)
-                    ? prev.aktivesModellId
-                    : modelle[0].id)
+                  ? (modelle.find(m => m.id === prev.aktivesModellId) ? prev.aktivesModellId : modelle[0].id)
                   : "",
               }));
             }
@@ -109,6 +114,28 @@ export function useApi() {
 
         apiRef.current = instance;
 
+        // Access Token holen
+        try {
+          const token = await instance.extension.requestPermission("accesstoken");
+          if (typeof token === "string" && token.length > 10) {
+            setAccessToken(token);
+          }
+        } catch (e) { console.warn("accessToken:", e); }
+
+        // Projekt ID holen
+        try {
+          const proj = await instance.project.getProject();
+          const pid = proj?.id || proj?.projectId || "";
+          setProjectId(pid);
+          console.log("Project ID:", pid);
+        } catch (e) {
+          try {
+            const proj = await instance.project.getCurrentProject();
+            setProjectId(proj?.id || "");
+          } catch {}
+        }
+
+        // Viewer Context prüfen
         try {
           await instance.ui.setMenu({
             title: "4D Bauablauf",
@@ -117,12 +144,18 @@ export function useApi() {
           });
         } catch (e) { console.warn("setMenu:", e); }
 
-        const modelle = await ladeModelle(instance);
-        setViewerState(prev => ({
-          ...prev,
-          modelle,
-          aktivesModellId: modelle.length > 0 ? modelle[0].id : "",
-        }));
+        try {
+          const modelle = await ladeModelle(instance);
+          if (modelle.length >= 0) {
+            setIsViewerContext(true);
+            setViewerState(prev => ({
+              ...prev, modelle,
+              aktivesModellId: modelle.length > 0 ? modelle[0].id : "",
+            }));
+          }
+        } catch {
+          setIsViewerContext(false);
+        }
 
         setApi(instance);
         setConnected(true);
@@ -134,5 +167,5 @@ export function useApi() {
     connect();
   }, []);
 
-  return { api, connected, viewerState, setViewerState };
+  return { api, connected, isViewerContext, accessToken, projectId, viewerState, setViewerState };
 }
