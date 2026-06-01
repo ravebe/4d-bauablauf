@@ -3,10 +3,10 @@ import { useState, useEffect } from "react";
 interface TCFile {
   id: string;
   name: string;
-  type: string;
-  parentId?: string;
   isFolder: boolean;
   fileType?: string;
+  size?: number;
+  modifiedOn?: string;
 }
 
 interface Props {
@@ -16,169 +16,149 @@ interface Props {
   setAusgewaehlteIds: (ids: string[]) => void;
 }
 
-const TC_API = "https://app.connect.trimble.com/tc/api/2.0";
+const PROXY = "/api/tc";
+const TC = "https://app.connect.trimble.com/tc/api/2.0";
+
+function proxyUrl(url: string, token: string) {
+  return `${PROXY}?url=${encodeURIComponent(url)}&token=${encodeURIComponent(token)}`;
+}
 
 export default function FileBrowser({ accessToken, projectId, ausgewaehlteIds, setAusgewaehlteIds }: Props) {
-  const [dateien, setDateien] = useState<TCFile[]>([]);
-  const [ordnerPfad, setOrdnerPfad] = useState<{ id: string; name: string }[]>([]);
+  const [items, setItems] = useState<TCFile[]>([]);
+  const [pfad, setPfad] = useState<{ id: string; name: string }[]>([]);
   const [laden, setLaden] = useState(false);
   const [fehler, setFehler] = useState("");
-  const [_aktuellerOrdner, setAktuellerOrdner] = useState<string | null>(null);
 
-  async function ladeDateien(folderId?: string) {
-    if (!accessToken || !projectId) {
-      setFehler("Kein Access Token oder Projekt ID.");
-      return;
-    }
-    setLaden(true);
-    setFehler("");
+  async function lade(folderId?: string) {
+    if (!accessToken) return;
+    setLaden(true); setFehler("");
     try {
-      const url = folderId
-        ? `${TC_API}/projects/${projectId}/files?folderId=${folderId}`
-        : `${TC_API}/projects/${projectId}/files`;
+      const base = folderId
+        ? `${TC}/projects/${projectId}/files?folderId=${folderId}`
+        : `${TC}/projects/${projectId}/files`;
 
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
-
+      const res = await fetch(proxyUrl(base, accessToken));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
-      const items: TCFile[] = [];
-      // Ordner
-      for (const f of (data.folders || data.items?.filter((i: any) => i.type === "folder") || [])) {
-        items.push({
-          id: f.id || f.folderId,
-          name: f.name || f.displayName,
-          type: "folder",
-          isFolder: true,
-        });
+      const result: TCFile[] = [];
+      for (const f of (data.folders || [])) {
+        result.push({ id: f.id, name: f.name || f.displayName, isFolder: true });
       }
-      // Dateien
-      for (const f of (data.files || data.items?.filter((i: any) => i.type !== "folder") || [])) {
+      for (const f of (data.files || [])) {
         const name: string = f.name || f.displayName || "";
-        const isIfc = name.toLowerCase().endsWith(".ifc") ||
-          (f.fileType || "").toLowerCase() === "ifc";
-        items.push({
-          id: f.id || f.fileId || f.fileVersionId,
+        result.push({
+          id: f.id || f.versionId,
           name,
-          type: "file",
           isFolder: false,
-          fileType: f.fileType || name.split(".").pop()?.toUpperCase(),
+          fileType: (f.fileType || name.split(".").pop() || "").toUpperCase(),
+          size: f.size,
+          modifiedOn: f.modifiedOn,
         });
-        void isIfc;
       }
-      setDateien(items);
+      setItems(result);
     } catch (e) {
-      console.error("ladeDateien:", e);
-      setFehler("Dateien konnten nicht geladen werden.");
-    } finally {
-      setLaden(false);
-    }
+      setFehler("Dateien konnten nicht geladen werden. " + String(e));
+    } finally { setLaden(false); }
   }
 
-  useEffect(() => {
-    if (accessToken && projectId) ladeDateien();
-  }, [accessToken, projectId]);
+  useEffect(() => { if (accessToken && projectId) lade(); }, [accessToken, projectId]);
 
-  function ordnerOeffnen(id: string, name: string) {
-    setOrdnerPfad(prev => [...prev, { id, name }]);
-    setAktuellerOrdner(id);
-    ladeDateien(id);
+  function oeffne(id: string, name: string) {
+    setPfad(p => [...p, { id, name }]);
+    lade(id);
   }
 
   function zurueck() {
-    const neuPfad = ordnerPfad.slice(0, -1);
-    setOrdnerPfad(neuPfad);
-    const eltern = neuPfad.length > 0 ? neuPfad[neuPfad.length - 1].id : undefined;
-    setAktuellerOrdner(eltern || null);
-    ladeDateien(eltern);
+    const neu = pfad.slice(0, -1);
+    setPfad(neu);
+    lade(neu.length > 0 ? neu[neu.length - 1].id : undefined);
   }
 
-  function toggleAuswahl(id: string) {
-    if (ausgewaehlteIds.includes(id)) {
-      setAusgewaehlteIds(ausgewaehlteIds.filter(x => x !== id));
-    } else {
-      setAusgewaehlteIds([...ausgewaehlteIds, id]);
-    }
+  function toggle(id: string) {
+    setAusgewaehlteIds(
+      ausgewaehlteIds.includes(id)
+        ? ausgewaehlteIds.filter(x => x !== id)
+        : [...ausgewaehlteIds, id]
+    );
   }
 
-  const ifcDateien = dateien.filter(d => !d.isFolder &&
-    (d.name.toLowerCase().endsWith(".ifc") || d.fileType?.toLowerCase() === "ifc"));
-  const ordner = dateien.filter(d => d.isFolder);
-  const andereeDateien = dateien.filter(d => !d.isFolder &&
-    !d.name.toLowerCase().endsWith(".ifc") && d.fileType?.toLowerCase() !== "ifc");
+  const ordner = items.filter(i => i.isFolder);
+  const ifc = items.filter(i => !i.isFolder && i.name.toLowerCase().endsWith(".ifc"));
+  const andere = items.filter(i => !i.isFolder && !i.name.toLowerCase().endsWith(".ifc"));
 
   return (
-    <div>
-      {/* Breadcrumb */}
-      <div className="breadcrumb">
-        <span className="breadcrumb-item" onClick={() => {
-          setOrdnerPfad([]);
-          setAktuellerOrdner(null);
-          ladeDateien();
-        }}>📁 Ablage</span>
-        {ordnerPfad.map((o, i) => (
-          <span key={o.id}>
-            <span className="breadcrumb-sep"> › </span>
-            <span className="breadcrumb-item" onClick={() => {
-              const neuPfad = ordnerPfad.slice(0, i + 1);
-              setOrdnerPfad(neuPfad);
-              setAktuellerOrdner(o.id);
-              ladeDateien(o.id);
-            }}>{o.name}</span>
+    <div className="file-browser">
+      <div className="fb-breadcrumb">
+        <span className="fb-crumb" onClick={() => { setPfad([]); lade(); }}>
+          📁 Ablage
+        </span>
+        {pfad.map((p, i) => (
+          <span key={p.id}>
+            <span className="fb-sep"> / </span>
+            <span className="fb-crumb" onClick={() => {
+              const neu = pfad.slice(0, i + 1);
+              setPfad(neu);
+              lade(p.id);
+            }}>{p.name}</span>
           </span>
         ))}
+        {pfad.length > 0 && (
+          <button className="fb-back" onClick={zurueck}>← Zurück</button>
+        )}
       </div>
 
-      {ordnerPfad.length > 0 && (
-        <button className="btn-xs" onClick={zurueck} style={{ marginBottom: 6 }}>← Zurück</button>
+      {laden && <div className="fb-loading">⟳ Lade Dateien...</div>}
+      {fehler && <div className="alert error" style={{ fontSize: 11 }}>{fehler}</div>}
+
+      {!laden && items.length === 0 && !fehler && (
+        <div className="fb-empty">Keine Dateien in diesem Ordner.</div>
       )}
 
-      {laden && <p className="hinweis">⟳ Lade Dateien...</p>}
-      {fehler && <div className="alert error">{fehler}</div>}
-
-      {!laden && !fehler && dateien.length === 0 && (
-        <div className="empty-state"><p>Keine Dateien gefunden.</p></div>
-      )}
-
-      {/* Ordner */}
       {ordner.map(o => (
-        <div key={o.id} className="file-item folder" onClick={() => ordnerOeffnen(o.id, o.name)}>
-          <span className="file-icon">📁</span>
-          <span className="file-name">{o.name}</span>
-          <span style={{ color: "var(--text-muted)", fontSize: 10 }}>›</span>
+        <div key={o.id} className="fb-item fb-folder" onClick={() => oeffne(o.id, o.name)}>
+          <span className="fb-item-icon">📁</span>
+          <span className="fb-item-name">{o.name}</span>
+          <span className="fb-item-arrow">›</span>
         </div>
       ))}
 
-      {/* IFC Dateien */}
-      {ifcDateien.map(f => (
-        <div key={f.id} className={`file-item ifc ${ausgewaehlteIds.includes(f.id) ? "ausgewaehlt" : ""}`}
-          onClick={() => toggleAuswahl(f.id)}>
+      {ifc.map(f => (
+        <div
+          key={f.id}
+          className={`fb-item fb-ifc ${ausgewaehlteIds.includes(f.id) ? "fb-selected" : ""}`}
+          onClick={() => toggle(f.id)}
+        >
           <input
             type="checkbox"
             checked={ausgewaehlteIds.includes(f.id)}
-            onChange={() => toggleAuswahl(f.id)}
+            onChange={() => toggle(f.id)}
             onClick={e => e.stopPropagation()}
-            style={{ marginRight: 6, flexShrink: 0 }}
+            className="fb-checkbox"
           />
-          <span className="file-icon">🏗️</span>
-          <span className="file-name">{f.name}</span>
-          <span className="file-type">IFC</span>
+          <span className="fb-item-icon">🏗️</span>
+          <div className="fb-item-info">
+            <span className="fb-item-name">{f.name}</span>
+            {f.modifiedOn && (
+              <span className="fb-item-meta">
+                {new Date(f.modifiedOn).toLocaleDateString("de-CH")}
+              </span>
+            )}
+          </div>
+          <span className="fb-badge ifc">IFC</span>
         </div>
       ))}
 
-      {/* Andere Dateien (ausgegraut) */}
-      {andereeDateien.slice(0, 5).map(f => (
-        <div key={f.id} className="file-item andere">
-          <span className="file-icon">📄</span>
-          <span className="file-name" style={{ color: "var(--text-muted)" }}>{f.name}</span>
-          <span className="file-type">{f.fileType}</span>
+      {andere.slice(0, 3).map(f => (
+        <div key={f.id} className="fb-item fb-other">
+          <span className="fb-item-icon">📄</span>
+          <span className="fb-item-name fb-muted">{f.name}</span>
+          <span className="fb-badge">{f.fileType}</span>
         </div>
       ))}
 
       {ausgewaehlteIds.length > 0 && (
-        <div style={{ marginTop: 8, padding: "6px 10px", background: "#DFF6DD", borderRadius: 4, fontSize: 11, color: "#0A4A0A" }}>
+        <div className="fb-selected-info">
           ✓ {ausgewaehlteIds.length} IFC-Datei(en) ausgewählt
         </div>
       )}
