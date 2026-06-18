@@ -18,6 +18,13 @@ export default function App() {
         </div>
       </div>
 
+      {/* Fehleranzeige */}
+      {fehler && (
+        <div style={{ padding: 8, fontSize: 11, color: "#b00", background: "#fff0f0", borderBottom: "1px solid #fcc" }}>
+          ⚠ {fehler}
+        </div>
+      )}
+
       {/* Tab Content */}
       <div className="tc-tab-content">
         <TabSchnitt
