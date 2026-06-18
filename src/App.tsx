@@ -11,7 +11,7 @@ export default function App() {
       <div className="tc-header">
         <div className="tc-header-left">
           <div className="tc-logo">✂</div>
-          <span className="tc-header-title">Schnitt-Tool</span>
+<span className="tc-header-title">Skizzentool</span>
         </div>
         <div className="tc-header-right">
           <span className={`tc-dot ${ready ? "on" : "off"}`} title={ready ? "Verbunden" : fehler ?? "Verbinde…"} />
