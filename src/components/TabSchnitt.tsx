@@ -31,7 +31,7 @@ export default function TabSchnitt({ api, letzterPick }: Props) {
   const [schnittfeldAktiv, setSchnittfeldAktiv] = useState(false);
 
   // Kamera
-  const [abstandM, setAbstandM] = useState(10);
+  const [abstandM, setAbstandM] = useState(0.1); // Ortho braucht wenig Abstand
 
   // Druckeinstellungen
   const [massstabIdx, setMassstabIdx] = useState(2); // 1:100
@@ -85,7 +85,7 @@ export default function TabSchnitt({ api, letzterPick }: Props) {
       // TC Section Box erwartet wahrscheinlich Meter (wie Kamera)
       // Testen: Position aus Pick könnte mm oder m sein — wir loggen beides
       const TIEFE = 0.5; // 50cm in Metern
-      const AUSDEHNUNG = 100; // 100m seitliche Ausdehnung
+      const AUSDEHNUNG = 30; // 30m seitliche Ausdehnung (100 crasht TC)
 
       let boxMin: { x: number; y: number; z: number };
       let boxMax: { x: number; y: number; z: number };
