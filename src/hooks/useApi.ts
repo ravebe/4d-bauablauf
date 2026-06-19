@@ -1,5 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import type { TcModel, TcSectionPlane, TcCamera } from "../types";
+
+export interface PickInfo {
+  position: { x: number; y: number; z: number } | null;
+  normal: { x: number; y: number; z: number } | null;
+  raw: any; // Roh-Daten für Debug
+}
 
 export interface ApiInstance {
   viewer: {
@@ -12,7 +18,7 @@ export interface ApiInstance {
     getSectionPlanes: () => Promise<TcSectionPlane[]>;
     removeSectionPlanes: (ids?: number[]) => Promise<void>;
 
-    // Section Box (Bereich begrenzen)
+    // Section Box (Schnittfeld)
     addSectionBox: (box: any) => Promise<any>;
     removeSectionBox: () => Promise<void>;
 
@@ -21,13 +27,17 @@ export interface ApiInstance {
     setCamera: (camera: TcCamera | "reset", options?: { animationTime?: number }) => Promise<void>;
 
     // Snapshot
-    getSnapshot: () => Promise<string>; // Data-URL: "data:image/png;base64,..."
+    getSnapshot: () => Promise<string>;
 
     onSelectionChanged: {
       addListener: (cb: (event: any) => void) => void;
       removeListener: (cb: (event: any) => void) => void;
     };
     onModelStateChanged?: {
+      addListener: (cb: (event: any) => void) => void;
+      removeListener: (cb: (event: any) => void) => void;
+    };
+    onPicked?: {
       addListener: (cb: (event: any) => void) => void;
       removeListener: (cb: (event: any) => void) => void;
     };
@@ -42,6 +52,7 @@ interface UseApiReturn {
   fehler: string | null;
   aktivesModellId: string | null;
   geladeneModelle: { id: string; name: string }[];
+  letzterPick: PickInfo | null;
 }
 
 export function useApi(): UseApiReturn {
@@ -50,24 +61,52 @@ export function useApi(): UseApiReturn {
   const [fehler, setFehler] = useState<string | null>(null);
   const [aktivesModellId, setAktivesModellId] = useState<string | null>(null);
   const [geladeneModelle, setGeladeneModelle] = useState<{ id: string; name: string }[]>([]);
+  const [letzterPick, setLetzterPick] = useState<PickInfo | null>(null);
+
+  const handlePick = useCallback((data: any) => {
+    console.log("[Skizzentool] onPicked raw:", JSON.stringify(data));
+    const pick: PickInfo = {
+      position: data?.position ?? data?.point ?? null,
+      normal: data?.normal ?? null,
+      raw: data,
+    };
+    setLetzterPick(pick);
+  }, []);
 
   useEffect(() => {
     let apiInst: ApiInstance | null = null;
 
+    async function warteAufWorkspaceApi(): Promise<any> {
+      for (let i = 0; i < 20; i++) {
+        const wapi = (window as any).TrimbleConnectWorkspace;
+        if (wapi) return wapi;
+        await new Promise(r => setTimeout(r, 500));
+      }
+      return null;
+    }
+
     async function init() {
       try {
-        let wapi = (window as any).TrimbleConnectWorkspace;
+        const wapi = await warteAufWorkspaceApi();
         if (!wapi) {
-          await new Promise(r => setTimeout(r, 1500));
-          wapi = (window as any).TrimbleConnectWorkspace;
-        }
-        if (!wapi) {
-          setFehler("TC Workspace API nicht gefunden");
+          setFehler("TC Workspace API nicht gefunden (10s Timeout)");
           return;
         }
 
-        apiInst = (await wapi.connect(window.parent, () => {})) as ApiInstance;
+        apiInst = (await wapi.connect(window.parent, (event: string, args: any) => {
+          // Globaler Event-Handler — fängt ALLE TC-Events
+          if (event === "viewer.onPicked") {
+            handlePick(args?.data);
+          }
+        })) as ApiInstance;
         setApi(apiInst);
+
+        // Auch über den spezifischen Listener versuchen
+        try {
+          apiInst.viewer.onPicked?.addListener((event: any) => {
+            handlePick(event?.data ?? event);
+          });
+        } catch { /* onPicked listener nicht verfügbar */ }
 
         const ladeModelle = async () => {
           for (let i = 0; i < 8; i++) {
@@ -118,7 +157,7 @@ export function useApi(): UseApiReturn {
     }
 
     init();
-  }, []);
+  }, [handlePick]);
 
-  return { api, ready, fehler, aktivesModellId, geladeneModelle };
+  return { api, ready, fehler, aktivesModellId, geladeneModelle, letzterPick };
 }

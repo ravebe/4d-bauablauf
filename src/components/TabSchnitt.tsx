@@ -1,11 +1,12 @@
 import { useState } from "react";
-import type { TcSectionPlane, TcCamera } from "../types";
-import type { ApiInstance } from "../hooks/useApi";
+import type { TcCamera } from "../types";
+import type { ApiInstance, PickInfo } from "../hooks/useApi";
 
 interface Props {
   api: ApiInstance | null;
   aktivesModellId: string | null;
   geladeneModelle: { id: string; name: string }[];
+  letzterPick: PickInfo | null;
 }
 
 // Massstab-Optionen
@@ -25,15 +26,9 @@ const PAPIER_OPTIONEN = [
   { label: "A3 hoch", breiteMM: 277, hoeheMM: 400 },
 ];
 
-export default function TabSchnitt({ api, aktivesModellId, geladeneModelle }: Props) {
-  const modellId = geladeneModelle[0]?.id ?? aktivesModellId ?? null;
-
-  // Schnittebenen
-  const [ebenen, setEbenen] = useState<TcSectionPlane[]>([]);
-  const [aktiveEbeneId, setAktiveEbeneId] = useState<number | null>(null);
-
-  // Schnittbox
-  const [tiefeCM, setTiefeCM] = useState(50); // Standard 50cm
+export default function TabSchnitt({ api, letzterPick }: Props) {
+  // Schnittfeld-Status
+  const [schnittfeldAktiv, setSchnittfeldAktiv] = useState(false);
 
   // Kamera
   const [abstandM, setAbstandM] = useState(10);
@@ -47,169 +42,153 @@ export default function TabSchnitt({ api, aktivesModellId, geladeneModelle }: Pr
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [laedt, setLaedt] = useState(false);
+  const [pickDebug, setPickDebug] = useState<string | null>(null);
 
-  const aktiveEbene = ebenen.find(e => e.id === aktiveEbeneId) ?? null;
+  // Gespeicherte Schnittfeld-Infos für Kamera-Ausrichtung
+  const [schnittNormal, setSchnittNormal] = useState<{ x: number; y: number; z: number } | null>(null);
+  const [schnittPos, setSchnittPos] = useState<{ x: number; y: number; z: number } | null>(null);
+
   const massstab = MASSSTAB_OPTIONEN[massstabIdx];
   const papier = PAPIER_OPTIONEN[papierIdx];
-
-  // OrthoSize berechnen: Papierbreite (m) × Massstab = sichtbare Modellbreite in Metern
-  // Beispiel: A4 quer 277mm bei 1:100 → 0.277 * 100 = 27.7m sichtbar
   const orthoSizeBerechnet = (papier.breiteMM / 1000) * massstab.wert;
 
-  // ─── 1. Schnittebene setzen ───
-  async function ebeneSetzen(ausrichtung: "horizontal" | "vertikal") {
-    if (!api) return;
+  // ─── 1. Schnittfeld aus Pick-Punkt setzen ───
+  async function schnittfeldAusPick() {
+    if (!api || !letzterPick) return;
     setStatus(null);
     setLaedt(true);
-    try {
-      const neu: TcSectionPlane = ausrichtung === "horizontal"
-        ? { positionX: 0, positionY: 0, positionZ: 0, directionX: 0, directionY: 0, directionZ: 1, controlsVisible: true }
-        : { positionX: 0, positionY: 0, positionZ: 0, directionX: 1, directionY: 0, directionZ: 0, controlsVisible: true };
-      await api.viewer.addSectionPlane(neu);
-      await ebenenAktualisieren();
-      setStatus(`✓ ${ausrichtung === "horizontal" ? "Horizontale" : "Vertikale"} Ebene gesetzt — im Viewer verschieben`);
-    } catch (e) {
-      setStatus(`Fehler: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setLaedt(false);
-    }
-  }
+    setPickDebug(JSON.stringify(letzterPick.raw, null, 1));
 
-  async function ebenenAktualisieren() {
-    if (!api) return;
     try {
-      const res = await api.viewer.getSectionPlanes();
-      const liste = Array.isArray(res) ? res : [];
-      setEbenen(liste);
-      if (liste.length > 0 && aktiveEbeneId == null) {
-        setAktiveEbeneId(liste[0].id ?? null);
+      const pos = letzterPick.position;
+      if (!pos) {
+        setStatus("Kein Pick-Punkt vorhanden — bitte zuerst ein Objekt im Viewer anklicken");
+        return;
       }
-    } catch (e) {
-      setStatus(`Fehler beim Auslesen: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
 
-  async function ebenenEntfernen() {
-    if (!api) return;
-    setLaedt(true);
-    try {
-      await api.viewer.removeSectionPlanes();
-      await api.viewer.removeSectionBox();
-      setEbenen([]);
-      setAktiveEbeneId(null);
-      setStatus("✓ Alle Schnittebenen + Box entfernt");
-    } catch (e) {
-      setStatus(`Fehler: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setLaedt(false);
-    }
-  }
+      // Normale bestimmen: aus Pick-Event oder Fallback auf dominante Achse
+      let nx = 0, ny = 0, nz = 0;
+      if (letzterPick.normal) {
+        nx = letzterPick.normal.x;
+        ny = letzterPick.normal.y;
+        nz = letzterPick.normal.z;
+      } else {
+        // Fallback: Grundriss (von oben) als Standard
+        nz = 1;
+      }
 
-  // ─── 2. Schnittbox aus aktiver Ebene + Tiefe ───
-  async function schnittboxSetzen() {
-    if (!api || !aktiveEbene) return;
-    setStatus(null);
-    setLaedt(true);
-    try {
-      const px = aktiveEbene.positionX ?? 0;
-      const py = aktiveEbene.positionY ?? 0;
-      const pz = aktiveEbene.positionZ ?? 0;
-      const nx = aktiveEbene.directionX ?? 0;
-      const nz = aktiveEbene.directionZ ?? 1;
+      // Dominante Achse bestimmen für achsenausgerichtete Section Box
+      const absX = Math.abs(nx);
+      const absY = Math.abs(ny);
+      const absZ = Math.abs(nz);
 
-      // Tiefe in mm (Position der SectionPlane ist in mm)
-      const tiefeMM = tiefeCM * 10;
-      const halbeTiefe = tiefeMM / 2;
-
-      // Grosse Ausdehnung in den anderen Richtungen
-      const GROSS = 200000; // 200m in mm
+      // TC Section Box erwartet wahrscheinlich Meter (wie Kamera)
+      // Testen: Position aus Pick könnte mm oder m sein — wir loggen beides
+      const TIEFE = 0.5; // 50cm in Metern
+      const AUSDEHNUNG = 100; // 100m seitliche Ausdehnung
 
       let boxMin: { x: number; y: number; z: number };
       let boxMax: { x: number; y: number; z: number };
 
-      if (Math.abs(nz) > 0.7) {
-        // Horizontaler Schnitt (Grundriss) — Box um Z-Achse begrenzt
-        boxMin = { x: px - GROSS, y: py - GROSS, z: pz - halbeTiefe };
-        boxMax = { x: px + GROSS, y: py + GROSS, z: pz + halbeTiefe };
-      } else if (Math.abs(nx) > 0.7) {
-        // Vertikaler Schnitt entlang X
-        boxMin = { x: px - halbeTiefe, y: py - GROSS, z: pz - GROSS };
-        boxMax = { x: px + halbeTiefe, y: py + GROSS, z: pz + GROSS };
+      if (absZ >= absX && absZ >= absY) {
+        // Horizontale Fläche (Decke/Boden) → Box begrenzt in Z
+        const dir = nz >= 0 ? 1 : -1;
+        boxMin = { x: pos.x - AUSDEHNUNG, y: pos.y - AUSDEHNUNG, z: pos.z - (dir > 0 ? TIEFE : 0) };
+        boxMax = { x: pos.x + AUSDEHNUNG, y: pos.y + AUSDEHNUNG, z: pos.z + (dir > 0 ? 0 : TIEFE) };
+        setSchnittNormal({ x: 0, y: 0, z: dir });
+      } else if (absX >= absY) {
+        // Wand entlang X → Box begrenzt in X
+        const dir = nx >= 0 ? 1 : -1;
+        boxMin = { x: pos.x - (dir > 0 ? TIEFE : 0), y: pos.y - AUSDEHNUNG, z: pos.z - AUSDEHNUNG };
+        boxMax = { x: pos.x + (dir > 0 ? 0 : TIEFE), y: pos.y + AUSDEHNUNG, z: pos.z + AUSDEHNUNG };
+        setSchnittNormal({ x: dir, y: 0, z: 0 });
       } else {
-        // Vertikaler Schnitt entlang Y
-        boxMin = { x: px - GROSS, y: py - halbeTiefe, z: pz - GROSS };
-        boxMax = { x: px + GROSS, y: py + halbeTiefe, z: pz + GROSS };
+        // Wand entlang Y → Box begrenzt in Y
+        const dir = ny >= 0 ? 1 : -1;
+        boxMin = { x: pos.x - AUSDEHNUNG, y: pos.y - (dir > 0 ? TIEFE : 0), z: pos.z - AUSDEHNUNG };
+        boxMax = { x: pos.x + AUSDEHNUNG, y: pos.y + (dir > 0 ? 0 : TIEFE), z: pos.z + AUSDEHNUNG };
+        setSchnittNormal({ x: 0, y: dir, z: 0 });
       }
+
+      setSchnittPos(pos);
 
       // Erst bestehende Box entfernen
       try { await api.viewer.removeSectionBox(); } catch { /* ok */ }
+      // Auch Schnittebenen aufräumen
+      try { await api.viewer.removeSectionPlanes(); } catch { /* ok */ }
 
+      console.log("[Skizzentool] SectionBox:", JSON.stringify({ min: boxMin, max: boxMax }));
       await api.viewer.addSectionBox({ min: boxMin, max: boxMax });
-      setStatus(`✓ Schnittbox gesetzt (Tiefe: ${tiefeCM} cm)`);
+      setSchnittfeldAktiv(true);
+      setStatus("✓ Schnittfeld gesetzt — im Viewer die Grösse mit den Griffen anpassen");
     } catch (e) {
-      setStatus(`Fehler Schnittbox: ${e instanceof Error ? e.message : String(e)}`);
+      setStatus(`Fehler: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLaedt(false);
     }
   }
 
-  // ─── 3. Kamera orthographisch ausrichten ───
-  // Benutzt lookAt + upDirection statt pitch/yaw (zuverlässiger in TC)
+  // ─── Schnittfeld entfernen ───
+  async function schnittfeldEntfernen() {
+    if (!api) return;
+    setLaedt(true);
+    try {
+      await api.viewer.removeSectionBox();
+      try { await api.viewer.removeSectionPlanes(); } catch { /* ok */ }
+      setSchnittfeldAktiv(false);
+      setSchnittNormal(null);
+      setSchnittPos(null);
+      setStatus("✓ Schnittfeld entfernt");
+    } catch (e) {
+      setStatus(`Fehler: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setLaedt(false);
+    }
+  }
+
+  // ─── 2. Kamera orthographisch ausrichten ───
   async function kameraAusrichten() {
-    if (!api || !aktiveEbene) return;
+    if (!api || !schnittPos || !schnittNormal) return;
     setStatus(null);
     setLaedt(true);
     try {
-      const nx = aktiveEbene.directionX ?? 0;
-      const ny = aktiveEbene.directionY ?? 0;
-      const nz = aktiveEbene.directionZ ?? 1;
-
-      // SectionPlane-Position mm → Kamera-Position Meter
-      const posM = {
-        x: (aktiveEbene.positionX ?? 0) / 1000,
-        y: (aktiveEbene.positionY ?? 0) / 1000,
-        z: (aktiveEbene.positionZ ?? 0) / 1000,
-      };
+      const nx = schnittNormal.x;
+      const ny = schnittNormal.y;
+      const nz = schnittNormal.z;
 
       let camPos: { x: number; y: number; z: number };
       let upDir: { x: number; y: number; z: number };
 
-      if (Math.abs(nz) > 0.7) {
+      if (Math.abs(nz) > 0.5) {
         // Grundriss: Kamera oben, schaut nach unten
-        // Vorzeichen von nz bestimmt ob von oben oder unten
-        const richtung = nz > 0 ? 1 : -1;
         camPos = {
-          x: posM.x,
-          y: posM.y,
-          z: posM.z + abstandM * richtung,
+          x: schnittPos.x,
+          y: schnittPos.y,
+          z: schnittPos.z + abstandM * (nz > 0 ? 1 : -1),
         };
-        // Up-Direction = Y-Achse (Norden oben im Grundriss)
         upDir = { x: 0, y: 1, z: 0 };
       } else {
-        // Wandschnitt: Kamera vor der Ebene, schaut horizontal darauf
+        // Wandschnitt: Kamera vor der Fläche
         camPos = {
-          x: posM.x + nx * abstandM,
-          y: posM.y + ny * abstandM,
-          z: posM.z + nz * abstandM,
+          x: schnittPos.x + nx * abstandM,
+          y: schnittPos.y + ny * abstandM,
+          z: schnittPos.z + nz * abstandM,
         };
-        // Up-Direction = Z-Achse (Oben bleibt oben)
         upDir = { x: 0, y: 0, z: 1 };
       }
 
       const neueKamera: TcCamera = {
         position: camPos,
-        lookAt: posM,
+        lookAt: schnittPos,
         upDirection: upDir,
         projectionType: "orthographic",
         orthoSize: orthoSizeBerechnet,
       };
 
       await api.viewer.setCamera(neueKamera);
-
-      // Zur Kontrolle zurücklesen
       const rueckgelesen = await api.viewer.getCamera();
       setKameraInfo(rueckgelesen);
-      setStatus(`✓ Kamera ausgerichtet — orthoSize: ${orthoSizeBerechnet.toFixed(1)}m (${massstab.label} / ${papier.label})`);
+      setStatus(`✓ Kamera ausgerichtet — ${massstab.label} / ${papier.label}`);
     } catch (e) {
       setStatus(`Fehler: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -217,7 +196,7 @@ export default function TabSchnitt({ api, aktivesModellId, geladeneModelle }: Pr
     }
   }
 
-  // ─── 4. Snapshot ───
+  // ─── 3. Snapshot ───
   async function snapshotMachen() {
     if (!api) return;
     setLaedt(true);
@@ -247,94 +226,56 @@ export default function TabSchnitt({ api, aktivesModellId, geladeneModelle }: Pr
     <div className="tasklist-wrap">
       <div className="detail-section">
 
-        {!modellId && (
-          <div className="alert info" style={{ marginTop: 5 }}>
-            ⟳ Warte auf Modell-Verbindung…
-          </div>
-        )}
-
-        {/* 1. Schnittebene setzen */}
+        {/* 1. Schnittfeld */}
         <div className="detail-block">
-          <div className="detail-block-title">1. Schnittebene setzen</div>
-          <div className="typ-btns">
-            <button className="tc-btn-secondary" disabled={laedt} onClick={() => ebeneSetzen("horizontal")}>
-              ⬍ Horizontal
-            </button>
-            <button className="tc-btn-secondary" disabled={laedt} onClick={() => ebeneSetzen("vertikal")}>
-              ⬌ Vertikal
-            </button>
-          </div>
-          <div className="tc-section-desc" style={{ marginTop: 6 }}>
-            Ebene im Viewer mit Griffen verschieben, dann «Aktualisieren».
-          </div>
-        </div>
-
-        {/* 2. Ebenen auslesen */}
-        <div className="detail-block">
-          <div className="detail-block-title">2. Ebenen</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button className="tc-btn-primary" disabled={laedt} onClick={ebenenAktualisieren} style={{ flex: 1 }}>
-              🔄 Aktualisieren
-            </button>
-            <button className="tc-btn-ghost" disabled={laedt || ebenen.length === 0} onClick={ebenenEntfernen}>
-              🗑 Alle entfernen
-            </button>
+          <div className="detail-block-title">1. Schnittfeld</div>
+          <div className="tc-section-desc" style={{ marginBottom: 6 }}>
+            Klicke auf eine Fläche im Viewer, dann «Schnittfeld setzen».
+            Die Box orientiert sich an der angeklickten Fläche, 50 cm tief.
+            Grösse danach im Viewer mit den Griffen anpassen.
           </div>
 
-          {ebenen.length === 0 ? (
-            <div style={{ fontSize: 10, color: "var(--tc-text-3)", marginTop: 6 }}>
-              Keine Schnittebenen aktiv
+          {letzterPick?.position ? (
+            <div style={{
+              padding: "6px 8px", fontSize: 10, borderRadius: 4, marginBottom: 6,
+              background: "var(--tc-blue-light)", border: "1px solid var(--tc-blue-border)"
+            }}>
+              <strong>Letzter Klick:</strong>{" "}
+              x={letzterPick.position.x.toFixed(2)},
+              y={letzterPick.position.y.toFixed(2)},
+              z={letzterPick.position.z.toFixed(2)}
+              {letzterPick.normal && (
+                <div>
+                  <strong>Normale:</strong>{" "}
+                  {letzterPick.normal.x.toFixed(2)},
+                  {letzterPick.normal.y.toFixed(2)},
+                  {letzterPick.normal.z.toFixed(2)}
+                </div>
+              )}
             </div>
           ) : (
-            <div style={{ marginTop: 6 }}>
-              {ebenen.map((e, i) => (
-                <div
-                  key={e.id ?? i}
-                  onClick={() => setAktiveEbeneId(e.id ?? null)}
-                  style={{
-                    padding: "6px 8px",
-                    fontSize: 10,
-                    borderRadius: 4,
-                    cursor: "pointer",
-                    marginBottom: 4,
-                    background: e.id === aktiveEbeneId ? "var(--tc-blue-light)" : "var(--tc-bg)",
-                    border: e.id === aktiveEbeneId ? "1px solid var(--tc-blue-border)" : "1px solid var(--tc-border-light)",
-                  }}
-                >
-                  <div><strong>Ebene #{e.id}</strong></div>
-                  <div style={{ color: "var(--tc-text-3)" }}>
-                    Pos (mm): {e.positionX?.toFixed(0)}, {e.positionY?.toFixed(0)}, {e.positionZ?.toFixed(0)}
-                  </div>
-                  <div style={{ color: "var(--tc-text-3)" }}>
-                    Richtung: {e.directionX?.toFixed(2)}, {e.directionY?.toFixed(2)}, {e.directionZ?.toFixed(2)}
-                  </div>
-                </div>
-              ))}
+            <div style={{ fontSize: 10, color: "var(--tc-text-3)", marginBottom: 6 }}>
+              ⟳ Warte auf Klick im Viewer…
             </div>
           )}
-        </div>
 
-        {/* 3. Schnittbox */}
-        <div className="detail-block">
-          <div className="detail-block-title">3. Schnittbox</div>
-          <div style={{ marginBottom: 6 }}>
-            <div className="tc-section-label">Tiefe (cm)</div>
-            <input className="tc-input" type="number" value={tiefeCM}
-              onChange={e => setTiefeCM(Number(e.target.value))}
-              style={{ width: 80 }} />
-          </div>
-          <button className="tc-btn-primary" style={{ width: "100%" }}
-            disabled={laedt || !aktiveEbene} onClick={schnittboxSetzen}>
-            📦 Schnittbox setzen
-          </button>
-          <div className="tc-section-desc" style={{ marginTop: 4 }}>
-            Begrenzt die Sichtbarkeit auf {tiefeCM} cm Tiefe um die aktive Ebene.
+          <div style={{ display: "flex", gap: 6 }}>
+            <button className="tc-btn-primary" style={{ flex: 1 }}
+              disabled={laedt || !letzterPick?.position}
+              onClick={schnittfeldAusPick}>
+              📦 Schnittfeld setzen
+            </button>
+            {schnittfeldAktiv && (
+              <button className="tc-btn-ghost" disabled={laedt} onClick={schnittfeldEntfernen}>
+                🗑
+              </button>
+            )}
           </div>
         </div>
 
-        {/* 4. Druckeinstellungen + Kamera */}
+        {/* 2. Druckeinstellungen + Kamera */}
         <div className="detail-block">
-          <div className="detail-block-title">4. Druckeinstellungen</div>
+          <div className="detail-block-title">2. Druckeinstellungen</div>
           <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
             <div style={{ flex: 1 }}>
               <div className="tc-section-label">Massstab</div>
@@ -367,7 +308,7 @@ export default function TabSchnitt({ api, aktivesModellId, geladeneModelle }: Pr
           </div>
 
           <button className="tc-btn-primary" style={{ width: "100%" }}
-            disabled={laedt || !aktiveEbene} onClick={kameraAusrichten}>
+            disabled={laedt || !schnittPos || !schnittNormal} onClick={kameraAusrichten}>
             📐 Orthographisch ausrichten
           </button>
 
@@ -383,9 +324,9 @@ export default function TabSchnitt({ api, aktivesModellId, geladeneModelle }: Pr
           )}
         </div>
 
-        {/* 5. Snapshot */}
+        {/* 3. Snapshot */}
         <div className="detail-block">
-          <div className="detail-block-title">5. Snapshot</div>
+          <div className="detail-block-title">3. Snapshot</div>
           <button className="tc-btn-primary" style={{ width: "100%" }} disabled={laedt} onClick={snapshotMachen}>
             📷 Snapshot erstellen
           </button>
@@ -399,6 +340,18 @@ export default function TabSchnitt({ api, aktivesModellId, geladeneModelle }: Pr
           <div className={`alert ${status.startsWith("✓") ? "ok" : "err"}`}>
             {status}
           </div>
+        )}
+
+        {/* Debug: Pick-Rohdaten */}
+        {pickDebug && (
+          <details style={{ marginTop: 8 }}>
+            <summary style={{ fontSize: 10, color: "var(--tc-text-3)", cursor: "pointer" }}>
+              Debug: Pick-Rohdaten
+            </summary>
+            <div style={{ fontSize: 9, color: "var(--tc-text-3)", fontFamily: "monospace", whiteSpace: "pre-wrap", marginTop: 4 }}>
+              {pickDebug}
+            </div>
+          </details>
         )}
 
       </div>

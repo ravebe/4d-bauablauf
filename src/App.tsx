@@ -3,7 +3,7 @@ import TabSchnitt from "./components/TabSchnitt";
 import "./App.css";
 
 export default function App() {
-  const { api, ready, fehler, aktivesModellId, geladeneModelle } = useApi();
+  const { api, ready, fehler, aktivesModellId, geladeneModelle, letzterPick } = useApi();
 
   return (
     <div className="tc-app">
@@ -11,7 +11,7 @@ export default function App() {
       <div className="tc-header">
         <div className="tc-header-left">
           <div className="tc-logo">✂</div>
-<span className="tc-header-title">Skizzentool</span>
+          <span className="tc-header-title">Skizzentool</span>
         </div>
         <div className="tc-header-right">
           <span className={`tc-dot ${ready ? "on" : "off"}`} title={ready ? "Verbunden" : fehler ?? "Verbinde…"} />
@@ -31,6 +31,7 @@ export default function App() {
           api={api}
           aktivesModellId={aktivesModellId}
           geladeneModelle={geladeneModelle}
+          letzterPick={letzterPick}
         />
       </div>
     </div>
