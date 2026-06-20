@@ -3,11 +3,10 @@ import TabSchnitt from "./components/TabSchnitt";
 import "./App.css";
 
 export default function App() {
-  const { api, ready, fehler, aktivesModellId, geladeneModelle, letzterPick } = useApi();
+  const { api, ready, fehler, aktivesModellId, letzterPick, aktuelleBox } = useApi();
 
   return (
     <div className="tc-app">
-      {/* Header */}
       <div className="tc-header">
         <div className="tc-header-left">
           <div className="tc-logo">✂</div>
@@ -18,20 +17,18 @@ export default function App() {
         </div>
       </div>
 
-      {/* Fehleranzeige */}
       {fehler && (
         <div style={{ padding: 8, fontSize: 11, color: "#b00", background: "#fff0f0", borderBottom: "1px solid #fcc" }}>
           ⚠ {fehler}
         </div>
       )}
 
-      {/* Tab Content */}
       <div className="tc-tab-content">
         <TabSchnitt
           api={api}
           aktivesModellId={aktivesModellId}
-          geladeneModelle={geladeneModelle}
           letzterPick={letzterPick}
+          aktuelleBox={aktuelleBox}
         />
       </div>
     </div>

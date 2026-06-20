@@ -1,26 +1,30 @@
 import { useEffect, useState, useCallback } from "react";
-import type { TcModel, TcSectionPlane, TcCamera } from "../types";
+import type { TcModel, TcSectionBox, TcCamera } from "../types";
 
+/** Pick-Info: Position + Normale aus onPicked-Event */
 export interface PickInfo {
-  position: { x: number; y: number; z: number } | null;
+  position: { x: number; y: number; z: number };
   normal: { x: number; y: number; z: number } | null;
-  raw: any; // Roh-Daten für Debug
+  objectRuntimeId?: number;
+  modelId?: string;
 }
 
 export interface ApiInstance {
   viewer: {
     getModels: () => Promise<TcModel[]>;
     getLoadedModel: () => Promise<TcModel[]>;
-    getObjectBoundingBoxes: (modelId: string, ids: number[]) => Promise<any[]>;
 
-    // Schnittebenen
-    addSectionPlane: (plane: TcSectionPlane | TcSectionPlane[]) => Promise<TcSectionPlane[]>;
-    getSectionPlanes: () => Promise<TcSectionPlane[]>;
-    removeSectionPlanes: (ids?: number[]) => Promise<void>;
+    // Tools
+    activateTool: (name: string, options?: Record<string, unknown>) => Promise<void>;
 
-    // Section Box (Schnittfeld)
-    addSectionBox: (box: any) => Promise<any>;
+    // Section Box
+    addSectionBox: (box: TcSectionBox) => Promise<TcSectionBox>;
     removeSectionBox: () => Promise<void>;
+    selectSectionBox: () => Promise<void>;
+    deSelectSectionBox: () => Promise<void>;
+
+    // Section Planes
+    removeSectionPlanes: (ids?: number[]) => Promise<void>;
 
     // Kamera
     getCamera: () => Promise<TcCamera>;
@@ -29,6 +33,7 @@ export interface ApiInstance {
     // Snapshot
     getSnapshot: () => Promise<string>;
 
+    // Events
     onSelectionChanged: {
       addListener: (cb: (event: any) => void) => void;
       removeListener: (cb: (event: any) => void) => void;
@@ -51,8 +56,8 @@ interface UseApiReturn {
   ready: boolean;
   fehler: string | null;
   aktivesModellId: string | null;
-  geladeneModelle: { id: string; name: string }[];
   letzterPick: PickInfo | null;
+  aktuelleBox: TcSectionBox | null;
 }
 
 export function useApi(): UseApiReturn {
@@ -60,17 +65,25 @@ export function useApi(): UseApiReturn {
   const [ready, setReady] = useState(false);
   const [fehler, setFehler] = useState<string | null>(null);
   const [aktivesModellId, setAktivesModellId] = useState<string | null>(null);
-  const [geladeneModelle, setGeladeneModelle] = useState<{ id: string; name: string }[]>([]);
   const [letzterPick, setLetzterPick] = useState<PickInfo | null>(null);
+  const [aktuelleBox, setAktuelleBox] = useState<TcSectionBox | null>(null);
 
   const handlePick = useCallback((data: any) => {
-    console.log("[Skizzentool] onPicked raw:", JSON.stringify(data));
-    const pick: PickInfo = {
-      position: data?.position ?? data?.point ?? null,
-      normal: data?.normal ?? null,
-      raw: data,
-    };
-    setLetzterPick(pick);
+    if (!data?.position) return;
+    console.log("[Skizzentool] onPicked:", JSON.stringify(data));
+    setLetzterPick({
+      position: data.position,
+      normal: data.normal ?? null,
+      objectRuntimeId: data.objectRuntimeId,
+      modelId: data.modelId,
+    });
+  }, []);
+
+  const handleSectionBoxChanged = useCallback((data: any) => {
+    console.log("[Skizzentool] onSectionBoxChanged:", JSON.stringify(data));
+    if (data && typeof data.positionX === "number") {
+      setAktuelleBox(data as TcSectionBox);
+    }
   }, []);
 
   useEffect(() => {
@@ -94,20 +107,23 @@ export function useApi(): UseApiReturn {
         }
 
         apiInst = (await wapi.connect(window.parent, (event: string, args: any) => {
-          // Globaler Event-Handler — fängt ALLE TC-Events
           if (event === "viewer.onPicked") {
             handlePick(args?.data);
+          }
+          if (event === "viewer.onSectionBoxChanged") {
+            handleSectionBoxChanged(args?.data);
           }
         })) as ApiInstance;
         setApi(apiInst);
 
-        // Auch über den spezifischen Listener versuchen
+        // Auch spezifische Listener versuchen
         try {
           apiInst.viewer.onPicked?.addListener((event: any) => {
             handlePick(event?.data ?? event);
           });
-        } catch { /* onPicked listener nicht verfügbar */ }
+        } catch { /* nicht verfügbar */ }
 
+        // Modelle laden
         const ladeModelle = async () => {
           for (let i = 0; i < 8; i++) {
             try {
@@ -115,22 +131,14 @@ export function useApi(): UseApiReturn {
               const arr = Array.isArray(geladen) ? geladen : geladen ? [geladen] : [];
               if (arr.length > 0) {
                 setAktivesModellId(arr[0].id || arr[0].modelId);
-                setGeladeneModelle(arr.map((m: any) => ({
-                  id: m.id || m.modelId,
-                  name: m.name || m.fileName || m.id
-                })));
                 return;
               }
             } catch { /* ignore */ }
             try {
               const modelle = await apiInst!.viewer.getModels() as any[];
-              const geladen = modelle.filter((m: any) => m.state === 'loaded');
+              const geladen = modelle.filter((m: any) => m.state === "loaded");
               if (geladen.length > 0) {
                 setAktivesModellId(geladen[0].id || geladen[0].modelId);
-                setGeladeneModelle(geladen.map((m: any) => ({
-                  id: m.id || m.modelId,
-                  name: m.name || m.fileName || m.id
-                })));
                 return;
               }
             } catch { /* ignore */ }
@@ -141,9 +149,9 @@ export function useApi(): UseApiReturn {
 
         try {
           (apiInst.viewer as any).onModelStateChanged?.addListener((event: any) => {
-            const data = event?.data;
-            if (data?.state === 'loaded' && (data?.id || data?.modelId)) {
-              setAktivesModellId(data.id || data.modelId);
+            const d = event?.data;
+            if (d?.state === "loaded" && (d?.id || d?.modelId)) {
+              setAktivesModellId(d.id || d.modelId);
             }
           });
         } catch { /* ignore */ }
@@ -157,7 +165,7 @@ export function useApi(): UseApiReturn {
     }
 
     init();
-  }, [handlePick]);
+  }, [handlePick, handleSectionBoxChanged]);
 
-  return { api, ready, fehler, aktivesModellId, geladeneModelle, letzterPick };
+  return { api, ready, fehler, aktivesModellId, letzterPick, aktuelleBox };
 }
