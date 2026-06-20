@@ -3,7 +3,7 @@ import TabSchnitt from "./components/TabSchnitt";
 import "./App.css";
 
 export default function App() {
-  const { api, ready, fehler, aktivesModellId, letzterPick, aktuelleBox } = useApi();
+  const { api, ready, fehler, aktivesModellId, letzterPick, aktuelleBox, boxAktiv } = useApi();
 
   return (
     <div className="tc-app">
@@ -29,6 +29,7 @@ export default function App() {
           aktivesModellId={aktivesModellId}
           letzterPick={letzterPick}
           aktuelleBox={aktuelleBox}
+          boxAktiv={boxAktiv}
         />
       </div>
     </div>

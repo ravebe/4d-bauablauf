@@ -13,27 +13,15 @@ export interface ApiInstance {
   viewer: {
     getModels: () => Promise<TcModel[]>;
     getLoadedModel: () => Promise<TcModel[]>;
-
-    // Tools
     activateTool: (name: string, options?: Record<string, unknown>) => Promise<void>;
-
-    // Section Box
     addSectionBox: (box: TcSectionBox) => Promise<TcSectionBox>;
     removeSectionBox: () => Promise<void>;
     selectSectionBox: () => Promise<void>;
     deSelectSectionBox: () => Promise<void>;
-
-    // Section Planes
     removeSectionPlanes: (ids?: number[]) => Promise<void>;
-
-    // Kamera
     getCamera: () => Promise<TcCamera>;
     setCamera: (camera: TcCamera | "reset", options?: { animationTime?: number }) => Promise<void>;
-
-    // Snapshot
     getSnapshot: () => Promise<string>;
-
-    // Events
     onSelectionChanged: {
       addListener: (cb: (event: any) => void) => void;
       removeListener: (cb: (event: any) => void) => void;
@@ -58,6 +46,7 @@ interface UseApiReturn {
   aktivesModellId: string | null;
   letzterPick: PickInfo | null;
   aktuelleBox: TcSectionBox | null;
+  boxAktiv: boolean;
 }
 
 export function useApi(): UseApiReturn {
@@ -67,10 +56,10 @@ export function useApi(): UseApiReturn {
   const [aktivesModellId, setAktivesModellId] = useState<string | null>(null);
   const [letzterPick, setLetzterPick] = useState<PickInfo | null>(null);
   const [aktuelleBox, setAktuelleBox] = useState<TcSectionBox | null>(null);
+  const [boxAktiv, setBoxAktiv] = useState(false);
 
   const handlePick = useCallback((data: any) => {
     if (!data?.position) return;
-    console.log("[Skizzentool] onPicked:", JSON.stringify(data));
     setLetzterPick({
       position: data.position,
       normal: data.normal ?? null,
@@ -80,9 +69,15 @@ export function useApi(): UseApiReturn {
   }, []);
 
   const handleSectionBoxChanged = useCallback((data: any) => {
-    console.log("[Skizzentool] onSectionBoxChanged:", JSON.stringify(data));
-    if (data && typeof data.positionX === "number") {
-      setAktuelleBox(data as TcSectionBox);
+    // TC liefert: { sectionBox: { positionX, ... }, action: "added"|"updated"|"removed" }
+    const box = data?.sectionBox ?? data;
+    const action = data?.action;
+    if (action === "removed") {
+      setAktuelleBox(null);
+      setBoxAktiv(false);
+    } else if (box && typeof box.positionX === "number") {
+      setAktuelleBox(box as TcSectionBox);
+      setBoxAktiv(true);
     }
   }, []);
 
@@ -107,23 +102,17 @@ export function useApi(): UseApiReturn {
         }
 
         apiInst = (await wapi.connect(window.parent, (event: string, args: any) => {
-          if (event === "viewer.onPicked") {
-            handlePick(args?.data);
-          }
-          if (event === "viewer.onSectionBoxChanged") {
-            handleSectionBoxChanged(args?.data);
-          }
+          if (event === "viewer.onPicked") handlePick(args?.data);
+          if (event === "viewer.onSectionBoxChanged") handleSectionBoxChanged(args?.data);
         })) as ApiInstance;
         setApi(apiInst);
 
-        // Auch spezifische Listener versuchen
         try {
           apiInst.viewer.onPicked?.addListener((event: any) => {
             handlePick(event?.data ?? event);
           });
         } catch { /* nicht verfügbar */ }
 
-        // Modelle laden
         const ladeModelle = async () => {
           for (let i = 0; i < 8; i++) {
             try {
@@ -167,5 +156,5 @@ export function useApi(): UseApiReturn {
     init();
   }, [handlePick, handleSectionBoxChanged]);
 
-  return { api, ready, fehler, aktivesModellId, letzterPick, aktuelleBox };
+  return { api, ready, fehler, aktivesModellId, letzterPick, aktuelleBox, boxAktiv };
 }

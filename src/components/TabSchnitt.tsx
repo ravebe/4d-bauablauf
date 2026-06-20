@@ -1,18 +1,22 @@
 import { useState } from "react";
 import type { TcSectionBox } from "../types";
 import type { ApiInstance, PickInfo } from "../hooks/useApi";
+import DruckDialog from "./DruckDialog";
 
 interface Props {
   api: ApiInstance | null;
   aktivesModellId: string | null;
   letzterPick: PickInfo | null;
   aktuelleBox: TcSectionBox | null;
+  boxAktiv: boolean;
 }
 
-export default function TabSchnitt({ api, letzterPick, aktuelleBox }: Props) {
+export default function TabSchnitt({ api, letzterPick, aktuelleBox, boxAktiv }: Props) {
   const [status, setStatus] = useState<string | null>(null);
   const [laedt, setLaedt] = useState(false);
   const [blickrichtung, setBlickrichtung] = useState<{ x: number; y: number; z: number } | null>(null);
+  const [blickPos, setBlickPos] = useState<{ x: number; y: number; z: number } | null>(null);
+  const [druckDialogOffen, setDruckDialogOffen] = useState(false);
 
   // ─── 1. TC Schnittfeld-Tool aktivieren ───
   async function schnittfeldAktivieren() {
@@ -21,35 +25,27 @@ export default function TabSchnitt({ api, letzterPick, aktuelleBox }: Props) {
     setStatus(null);
     try {
       await api.viewer.activateTool("sectionBox");
-      setStatus("✓ Schnittfeld-Tool aktiv — im Viewer platzieren und mit Griffen anpassen");
-    } catch (e) {
-      // Falls "sectionBox" nicht der richtige Name ist, Alternativen probieren
-      console.log("[Skizzentool] sectionBox fehlgeschlagen, versuche clipBox...");
+      setStatus("✓ Schnittfeld-Tool aktiv — Fläche anklicken zum Platzieren");
+    } catch {
       try {
         await api.viewer.activateTool("clipBox");
-        setStatus("✓ Schnittfeld-Tool aktiv (clipBox)");
-      } catch (e2) {
-        console.log("[Skizzentool] clipBox auch fehlgeschlagen, versuche sectionfield...");
-        try {
-          await api.viewer.activateTool("sectionfield");
-          setStatus("✓ Schnittfeld-Tool aktiv (sectionfield)");
-        } catch (e3) {
-          setStatus(`Fehler: Tool konnte nicht aktiviert werden. Versuche es manuell über die TC-Toolbar.`);
-          console.error("[Skizzentool] activateTool Fehler:", e, e2, e3);
-        }
+        setStatus("✓ Schnittfeld-Tool aktiv");
+      } catch {
+        setStatus("Tool konnte nicht aktiviert werden — verwende die TC-Toolbar");
       }
     } finally {
       setLaedt(false);
     }
   }
 
-  // ─── 2. Blickrichtung aus Pick speichern ───
+  // ─── 2. Blickrichtung speichern ───
   function blickrichtungSpeichern() {
-    if (!letzterPick?.normal) {
-      setStatus("Kein Pick mit Normale vorhanden — klicke auf eine Fläche im Viewer");
+    if (!letzterPick?.normal || !letzterPick?.position) {
+      setStatus("Klicke zuerst auf eine Fläche im Viewer");
       return;
     }
     setBlickrichtung(letzterPick.normal);
+    setBlickPos(letzterPick.position);
     setStatus("✓ Blickrichtung gespeichert");
   }
 
@@ -78,42 +74,49 @@ export default function TabSchnitt({ api, letzterPick, aktuelleBox }: Props) {
     );
   }
 
+  // Druckdialog
+  if (druckDialogOffen && blickrichtung && blickPos) {
+    return (
+      <DruckDialog
+        api={api}
+        blickrichtung={blickrichtung}
+        schnittPos={blickPos}
+        onClose={() => setDruckDialogOffen(false)}
+      />
+    );
+  }
+
   return (
     <div className="tasklist-wrap">
       <div className="detail-section">
 
-        {/* 1. Schnittfeld aktivieren */}
+        {/* 1. Schnittfeld */}
         <div className="detail-block">
           <div className="detail-block-title">1. Schnittfeld</div>
           <div className="tc-section-desc" style={{ marginBottom: 6 }}>
-            Aktiviert das TC-Schnittfeld. Platzierung, Grösse und Tiefe
-            im Viewer mit den Griffen anpassen.
+            TC-Schnittfeld aktivieren, dann auf eine Fläche klicken. Grösse und Tiefe mit den Griffen anpassen.
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button className="tc-btn-primary" style={{ flex: 1 }}
               disabled={laedt} onClick={schnittfeldAktivieren}>
               📦 Schnittfeld aktivieren
             </button>
-            <button className="tc-btn-ghost" disabled={laedt} onClick={schnittfeldEntfernen}>
-              🗑
-            </button>
+            {boxAktiv && (
+              <button className="tc-btn-ghost" disabled={laedt} onClick={schnittfeldEntfernen}>
+                🗑
+              </button>
+            )}
           </div>
 
-          {/* Aktuelle Box-Info */}
           {aktuelleBox && (
             <div style={{
               marginTop: 6, padding: "6px 8px", fontSize: 10, borderRadius: 4,
               background: "var(--tc-bg)", border: "1px solid var(--tc-border-light)"
             }}>
-              <strong>Aktives Schnittfeld:</strong>
+              <strong>Schnittfeld aktiv</strong>
               <div style={{ color: "var(--tc-text-3)" }}>
-                Pos: {(aktuelleBox.positionX / 1000).toFixed(1)}m,
-                {(aktuelleBox.positionY / 1000).toFixed(1)}m,
-                {(aktuelleBox.positionZ / 1000).toFixed(1)}m
-              </div>
-              <div style={{ color: "var(--tc-text-3)" }}>
-                Grösse: {(aktuelleBox.sizeX / 1000).toFixed(1)}m ×
-                {(aktuelleBox.sizeY / 1000).toFixed(1)}m ×
+                Grösse: {(aktuelleBox.sizeX / 1000).toFixed(1)}m ×{" "}
+                {(aktuelleBox.sizeY / 1000).toFixed(1)}m ×{" "}
                 {(aktuelleBox.sizeZ / 1000).toFixed(1)}m
               </div>
             </div>
@@ -124,7 +127,7 @@ export default function TabSchnitt({ api, letzterPick, aktuelleBox }: Props) {
         <div className="detail-block">
           <div className="detail-block-title">2. Blickrichtung</div>
           <div className="tc-section-desc" style={{ marginBottom: 6 }}>
-            Klicke auf die Fläche die du frontal sehen willst, dann speichere die Blickrichtung.
+            Klicke auf die Fläche die du frontal sehen willst.
           </div>
 
           {letzterPick?.position ? (
@@ -132,22 +135,18 @@ export default function TabSchnitt({ api, letzterPick, aktuelleBox }: Props) {
               padding: "6px 8px", fontSize: 10, borderRadius: 4, marginBottom: 6,
               background: "var(--tc-blue-light)", border: "1px solid var(--tc-blue-border)"
             }}>
-              <strong>Letzter Klick:</strong>{" "}
-              x={letzterPick.position.x.toFixed(2)},
-              y={letzterPick.position.y.toFixed(2)},
-              z={letzterPick.position.z.toFixed(2)}
+              <strong>Letzter Klick</strong>
               {letzterPick.normal && (
-                <div>
-                  <strong>Normale:</strong>{" "}
-                  {letzterPick.normal.x.toFixed(3)},
-                  {letzterPick.normal.y.toFixed(3)},
-                  {letzterPick.normal.z.toFixed(3)}
+                <div style={{ color: "var(--tc-text-3)" }}>
+                  Normale: ({letzterPick.normal.x.toFixed(2)}, {letzterPick.normal.y.toFixed(2)}, {letzterPick.normal.z.toFixed(2)})
+                  {" → "}
+                  {Math.abs(letzterPick.normal.z) > 0.7 ? "Grundriss" : "Schnitt"}
                 </div>
               )}
             </div>
           ) : (
             <div style={{ fontSize: 10, color: "var(--tc-text-3)", marginBottom: 6 }}>
-              ⟳ Warte auf Klick im Viewer…
+              ⟳ Warte auf Klick…
             </div>
           )}
 
@@ -161,24 +160,21 @@ export default function TabSchnitt({ api, letzterPick, aktuelleBox }: Props) {
               marginTop: 6, padding: "6px 8px", fontSize: 10, borderRadius: 4,
               background: "#e8f5e9", border: "1px solid #a5d6a7"
             }}>
-              ✓ Gespeichert: ({blickrichtung.x.toFixed(3)}, {blickrichtung.y.toFixed(3)}, {blickrichtung.z.toFixed(3)})
-              <div style={{ color: "var(--tc-text-3)" }}>
-                {Math.abs(blickrichtung.z) > 0.7 ? "→ Grundriss (von oben)" : "→ Schnitt (frontal)"}
-              </div>
+              ✓ {Math.abs(blickrichtung.z) > 0.7 ? "Grundriss (von oben)" : "Schnitt (frontal)"}
             </div>
           )}
         </div>
 
-        {/* 3. Drucken (Phase 2 Platzhalter) */}
+        {/* 3. Drucken */}
         <div className="detail-block">
           <div className="detail-block-title">3. Drucken</div>
           <button className="tc-btn-primary" style={{ width: "100%" }}
-            disabled={!blickrichtung}
-            onClick={() => setStatus("Druckfenster kommt in Phase 2")}>
+            disabled={!blickrichtung || !blickPos}
+            onClick={() => setDruckDialogOffen(true)}>
             🖨 Drucken…
           </button>
           <div className="tc-section-desc" style={{ marginTop: 4 }}>
-            Öffnet das Druckfenster mit Massstab, Format und PDF-Export.
+            Öffnet die Druckvorschau mit Massstab, Format und PDF-Export.
           </div>
         </div>
 
