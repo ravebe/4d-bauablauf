@@ -18,21 +18,35 @@ export default function TabSchnitt({ api, letzterPick, aktuelleBox, boxAktiv }: 
   const [blickPos, setBlickPos] = useState<{ x: number; y: number; z: number } | null>(null);
   const [druckDialogOffen, setDruckDialogOffen] = useState(false);
 
-  // ─── 1. TC Schnittfeld-Tool aktivieren ───
+  // ─── 1. TC Schnittfeld-Tool aktivieren + Auto-Ortho ───
   async function schnittfeldAktivieren() {
     if (!api) return;
     setLaedt(true);
     setStatus(null);
     try {
-      await api.viewer.activateTool("sectionBox");
-      setStatus("✓ Schnittfeld-Tool aktiv — Fläche anklicken zum Platzieren");
-    } catch {
+      // Zuerst auf orthographische Projektion schalten
       try {
-        await api.viewer.activateTool("clipBox");
-        setStatus("✓ Schnittfeld-Tool aktiv");
+        const cam = await api.viewer.getCamera();
+        if (cam.projectionType !== "orthographic") {
+          await api.viewer.setCamera({
+            ...cam,
+            projectionType: "orthographic",
+          });
+        }
+      } catch { /* Kamera-Fehler ignorieren */ }
+
+      // Schnittfeld-Tool aktivieren
+      try {
+        await api.viewer.activateTool("sectionBox");
       } catch {
-        setStatus("Tool konnte nicht aktiviert werden — verwende die TC-Toolbar");
+        try {
+          await api.viewer.activateTool("clipBox");
+        } catch { /* Fallback */ }
       }
+
+      setStatus("✓ Schnittfeld-Tool aktiv — orthographische Ansicht eingestellt");
+    } catch (e) {
+      setStatus(`Fehler: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLaedt(false);
     }
@@ -74,7 +88,6 @@ export default function TabSchnitt({ api, letzterPick, aktuelleBox, boxAktiv }: 
     );
   }
 
-  // Druckdialog
   if (druckDialogOffen && blickrichtung && blickPos) {
     return (
       <DruckDialog
@@ -94,7 +107,7 @@ export default function TabSchnitt({ api, letzterPick, aktuelleBox, boxAktiv }: 
         <div className="detail-block">
           <div className="detail-block-title">1. Schnittfeld</div>
           <div className="tc-section-desc" style={{ marginBottom: 6 }}>
-            TC-Schnittfeld aktivieren, dann auf eine Fläche klicken. Grösse und Tiefe mit den Griffen anpassen.
+            Aktiviert das Schnittfeld und schaltet auf orthographische Ansicht.
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button className="tc-btn-primary" style={{ flex: 1 }}
@@ -115,9 +128,7 @@ export default function TabSchnitt({ api, letzterPick, aktuelleBox, boxAktiv }: 
             }}>
               <strong>Schnittfeld aktiv</strong>
               <div style={{ color: "var(--tc-text-3)" }}>
-                Grösse: {(aktuelleBox.sizeX / 1000).toFixed(1)}m ×{" "}
-                {(aktuelleBox.sizeY / 1000).toFixed(1)}m ×{" "}
-                {(aktuelleBox.sizeZ / 1000).toFixed(1)}m
+                Grösse: {(aktuelleBox.sizeX / 1000).toFixed(1)} × {(aktuelleBox.sizeY / 1000).toFixed(1)} × {(aktuelleBox.sizeZ / 1000).toFixed(1)}m
               </div>
             </div>
           )}
@@ -138,9 +149,7 @@ export default function TabSchnitt({ api, letzterPick, aktuelleBox, boxAktiv }: 
               <strong>Letzter Klick</strong>
               {letzterPick.normal && (
                 <div style={{ color: "var(--tc-text-3)" }}>
-                  Normale: ({letzterPick.normal.x.toFixed(2)}, {letzterPick.normal.y.toFixed(2)}, {letzterPick.normal.z.toFixed(2)})
-                  {" → "}
-                  {Math.abs(letzterPick.normal.z) > 0.7 ? "Grundriss" : "Schnitt"}
+                  {Math.abs(letzterPick.normal.z) > 0.7 ? "→ Grundriss (von oben)" : "→ Schnitt (frontal)"}
                 </div>
               )}
             </div>
@@ -174,11 +183,10 @@ export default function TabSchnitt({ api, letzterPick, aktuelleBox, boxAktiv }: 
             🖨 Drucken…
           </button>
           <div className="tc-section-desc" style={{ marginTop: 4 }}>
-            Öffnet die Druckvorschau mit Massstab, Format und PDF-Export.
+            Massstab, Format und PDF-Export.
           </div>
         </div>
 
-        {/* Status */}
         {status && (
           <div className={`alert ${status.startsWith("✓") ? "ok" : "err"}`}>
             {status}
