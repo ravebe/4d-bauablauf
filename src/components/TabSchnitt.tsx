@@ -94,6 +94,7 @@ export default function TabSchnitt({ api, letzterPick, aktuelleBox, boxAktiv }: 
         api={api}
         blickrichtung={blickrichtung}
         schnittPos={blickPos}
+        aktuelleBox={aktuelleBox}
         onClose={() => setDruckDialogOffen(false)}
       />
     );

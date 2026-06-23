@@ -1,6 +1,14 @@
 // Vercel Serverless Function: Proxy für TC REST API File-Upload
 // Umgeht CORS-Blockade zwischen Extension (Vercel) und TC API
 
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: "10mb",
+    },
+  },
+};
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
